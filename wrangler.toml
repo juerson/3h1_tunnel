@@ -5,12 +5,13 @@ workers_dev = true
 
 [vars]
 UUID4 = "61098bdc-b734-4874-9e87-d18b1ef1cfaf"   # vless，它优先于worker.js中的userID
-USERPWD = "61098bdc-b734-4874-9e87-d18b1ef1cfaf" # trojan，没有设置这个值，就使用前面的UUID4
+# USERPWD = "61098bdc-b734-4874-9e87-d18b1ef1cfaf" # trojan，没有设置这个值，就使用前面的UUID4
 ENABLED_S5 = ""                                  # ss，可选['1', 'true', 'yes', 'on']启用ss协议，没有设置该变量值，默认是关闭，慎用
 ALLOWED_RULES = "0.0.0.0/0,::/0"                 # ss，允许哪个IP或哪些IP连接使用（默认所有IP），可输入纯IPv4/IPv6地址，精准匹配，也可以输入CIDR，允许这个范围内的IP使用
-# SOCKS5和PROXYIP
-SOCKS5 = ""                                      # 它优先于worker.js中的socks5Address，同时也优先于下面的LANDING_ADDRESS（PROXYIP）
-LANDING_ADDRESS = ""                             # 它优先于worker.js中的landingAddress，该参数就是大家公认的PROXYIP
+# 4种外部代理途径
+SOCKS5 = ""                                      # 优先级：path > env (如果path中传入/nat=值就它优先级最高); SOCKS5 > HTTP > LANDING_ADDRESS > NAT64
+HTTP = ""																				 # 格式跟socks5一样的，共用一个账号信息解析函数；它就是古老的http://和https://代理形式，需去掉协议头字符串
+LANDING_ADDRESS = ""                             # 等价于大家公认的PROXYIP
 NAT64 = ""                                       # 既无设置socks5也无设置proxyip，就使用它兜底，NAT64地址的前缀(记得去掉/96)
 # 订阅版-访问密码
 CONFIG_PASSWORD = ""                             # 查看节点的配置信息的密码，留空则公开， 所有人都能看到
