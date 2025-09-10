@@ -7,15 +7,10 @@ import { getBaseConfig, buildLinks, buildYamls, buildJsons } from './output.js';
 
 let userID = '61098bdc-b734-4874-9e87-d18b1ef1cfaf';
 let sha224Password = 'b379f280b9a4ce21e465cb31eea09a8fe3f4f8dd1850d9f630737538'; // sha224Encrypter('a8b047f5-9d2f-441b-bb4e-9866a645b945')
-let landingAddress = '';
-let socks5Address = ''; // 格式: user:pass@host:port、:@host:port
-// NAT64 IPv6 前缀，设置的值已失效，暂时保留，期望未来能使用，新值从环境变量传入覆盖
-let nat64IPv6Prefix = `${["2001", "67c", "2960", "6464"].join(":")}::`;
-
-let parsedLandingAddress = { hostname: null, port: 443 };
-let parsedSocks5Address = {};
-let enableSocks = false;
-
+let codeDefaultSOCKS = ''; // 格式: user:pass@host:port、host:port
+let codeDefaultHTTP = ''; // 格式: user:pass@host:port、host:port
+let codeDefaultPYIP = ''; // [Host][:port]，多值用逗号隔开
+let codeDefaultNAT64 = `${["2602", "fc59", "b0", "64"].join(":")}::`; // NAT64 IPv6 前缀，可以去掉或保留"/96"
 // 控制 Skc0swodahs 协议的两个关键参数
 let s5Lock = false; // true=启用，false=禁用
 let allowedRules = ["0.0.0.0/0", "::/0"]; // 你连接节点时，所用的公网IP，是否在这个范围内？不在就不允许连接，支持CIDR和具体的IP地址
@@ -75,6 +70,13 @@ const defaultMaxNodeMap = {
 	},
 };
 
+let parsedSocks5Address = {};
+let parsedLandingAddress = { hostname: null, port: 443 };
+let nat64IPv6Prefix = "";
+let enableSocks = false;
+let enableHttp = false;
+let enableNat = false;
+
 export default {
 	async fetch(request, env, ctx) {
 		try {
@@ -91,10 +93,6 @@ export default {
 			})();
 			const raw = (env.ALLOWED_RULES ?? "").trim().split(/[, \n\r\t]+/).map(x => x.trim()).filter(Boolean);
 			allowedRules = raw.length > 0 ? raw : ["0.0.0.0/0", "::/0"];
-
-			let landingAddr = env.LANDING_ADDRESS || landingAddress;
-			let socks5Addr = env.SOCKS5 || socks5Address;
-			nat64IPv6Prefix = env.NAT64 || nat64IPv6Prefix; // 不要将整个nat64 prefix cidr传入使用
 
 			const url = new URL(request.url);
 			const path = url.pathname;
@@ -114,30 +112,14 @@ export default {
 				};
 				return await handleRequest(path, config, defaultMaxNodeMap);
 			} else {
-				// 复位，防止上次请求的状态影响本次请求
+				// 复位，防止上次请求的状态影响本次请求（特指，客户端上修改的path值）
 				parsedSocks5Address = {};
 				enableSocks = false;
-
-				if (path.includes('/pyip=')) {
-					landingAddr = path.split('/pyip=')[1];
-					enableSocks = false;
-				} else if (path.includes('/socks=')) {
-					socks5Addr = path.split('/socks=')[1];
-					enableSocks = true;
-				}
-				if (socks5Addr) {
-					parsedSocks5Address = socks5AddressParser(socks5Addr);
-				} else if (landingAddr) {
-					let poxyaddr = '';
-					if (landingAddr.includes(',')) {
-						const arr = landingAddr.split(',');
-						const randomIndex = Math.floor(Math.random() * arr.length);
-						poxyaddr = arr[randomIndex].trim();
-					} else {
-						poxyaddr = landingAddr.trim();
-					}
-					parsedLandingAddress = hostPortParser(poxyaddr);
-				}
+				enableHttp = false;
+				enableNat = false;
+				// 重新获取数据并更新它们
+				let connectData = parseConnetMode(path, env, codeDefaultSOCKS, codeDefaultHTTP, codeDefaultPYIP, codeDefaultNAT64);
+				({ parsedSocks5Address, parsedLandingAddress, nat64IPv6Prefix, enableSocks, enableHttp, enableNat } = connectData);
 				return await handleWebSocket(request);
 			}
 		} catch (err) {
@@ -211,7 +193,7 @@ async function handleRequest(path, config, defaultMaxNodeMap) {
 				let defaultCount = defaultMaxNodeMap[target]?.default ?? defaultMaxNodeMap['']?.default;
 				let ipsResult = ipsPaging(ipsArray, maxNode, page, upperLimit, defaultCount);
 				if (ipsResult?.hasError) {
-					return new Response((ipsResult.message, { status: 200, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }));
+					return new Response(ipsResult.message, { status: 200, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
 				}
 
 				let htmlDoc = 'Not Found!';
@@ -278,9 +260,7 @@ async function handleWebSocket(request) {
 
 	let isDns = false;
 	let udpStreamWrite = null;
-	let remoteSocketWrapper = {
-		value: null,
-	};
+	let remoteSocketWrapper = { value: null };
 
 	// 启动握手超时
 	const clearHandshakeTimer = startHandshakeTimeout({
@@ -611,8 +591,8 @@ function parseSkc0swodahsHeader(buffer) {
 
 async function handleTCPOutbds(remoteSocket, headerInfo, webSocket, log) {
 	const { addressType, addressRemote, portRemote, rawClientData, responseHeader: vResponseHeader } = headerInfo;
-	async function connectAndWrite(address, port, socks = false) {
-		const tcpSocket = socks ? await socks5Connect(addressType, address, port, log) : connect({ hostname: address, port: port });
+	async function connectAndWrite(address, port, { socks = false, http = false } = {}) {
+		const tcpSocket = socks ? await socks5Connect(addressType, address, port, log) : (http ? await httpConnect(address, port, log) : connect({ hostname: address, port }));
 		log(`connected to ${address}:${port}`);
 		remoteSocket.value = tcpSocket;
 		const writer = tcpSocket.writable.getWriter();
@@ -621,8 +601,9 @@ async function handleTCPOutbds(remoteSocket, headerInfo, webSocket, log) {
 		return tcpSocket;
 	}
 	async function retry() {
-		if (enableSocks) {
-			tcpSocket = await connectAndWrite(addressRemote, portRemote, true);
+		let opt = enableSocks ? { socks: true } : (enableHttp ? { http: true } : {})
+		if (enableSocks || enableHttp) {
+			tcpSocket = await connectAndWrite(addressRemote, portRemote, opt);
 		} else {
 			const { address, port } = await resolveTargetAddress(addressRemote, portRemote);
 			tcpSocket = await connectAndWrite(address, port);
@@ -635,8 +616,9 @@ async function handleTCPOutbds(remoteSocket, headerInfo, webSocket, log) {
 	remoteSocketToWS(tcpSocket, webSocket, vResponseHeader, retry, log);
 }
 
+// ———————————————————————— pyip/nat64 代理 ————————————————————————
 async function resolveTargetAddress(addressRemote, portRemote, serverAddr = parsedLandingAddress) {
-	if (serverAddr?.hostname) {
+	if (!enableNat && serverAddr?.hostname) {
 		return {
 			address: serverAddr.hostname,
 			port: serverAddr.port || portRemote,
@@ -649,7 +631,6 @@ async function resolveTargetAddress(addressRemote, portRemote, serverAddr = pars
 		};
 	}
 }
-
 async function getNAT64IPv6Addr(addressRemote, prefix = nat64IPv6Prefix) {
 	if (typeof addressRemote !== 'string' || !addressRemote.trim()) return '';
 
@@ -681,6 +662,7 @@ async function getNAT64IPv6Addr(addressRemote, prefix = nat64IPv6Prefix) {
 	}
 }
 
+// ———————————————————————— socks5 代理 ————————————————————————
 async function socks5Connect(addressType, addressRemote, portRemote, log) {
 	const { username, password, hostname, port } = parsedSocks5Address;
 	const socket = connect({ hostname, port });
@@ -742,6 +724,84 @@ async function socks5Connect(addressType, addressRemote, portRemote, log) {
 	writer.releaseLock();
 	reader.releaseLock();
 	return socket;
+}
+
+// ———————————————————————— http 代理 ————————————————————————
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+function buildConnectRequest(host, port, username, password) {
+	const headers = [
+		`CONNECT ${host}:${port} HTTP/1.1`,
+		`Host: ${host}:${port}`,
+		`User-Agent: Mozilla/5.0 (Windows NT10.0; Win64; x64) AppleWebKit/537.36`,
+		`Proxy-Connection: keep-alive`,
+		`Connection: keep-alive`,
+	];
+	if (username && password) {
+		const auth = btoa(`${username}:${password}`);
+		headers.push(`Proxy-Authorization: Basic ${auth}`);
+	}
+	return headers.join('\r\n') + '\r\n\r\n';
+}
+async function sendRequest(sock, request) {
+	const writer = sock.writable.getWriter();
+	await writer.write(textEncoder.encode(request));
+	writer.releaseLock();
+}
+async function readResponse(sock) {
+	const reader = sock.readable.getReader();
+	let headerBuffer = new Uint8Array(0);
+	try {
+		while (true) {
+			const { value, done } = await reader.read();
+			if (done) throw new Error('HTTP连接被中断');
+			headerBuffer = appendBuffer(headerBuffer, value);
+			const headerEnd = findHeaderEnd(headerBuffer);
+			if (headerEnd !== -1) {
+				const responseText = textDecoder.decode(headerBuffer.slice(0, headerEnd));
+				if (/^HTTP\/1\.[01] 200/.test(responseText)) {
+					const body = headerBuffer.slice(headerEnd + 4);
+					if (body.length) {
+						const writer = sock.readable.getWriter();
+						writer.write(body);
+						writer.close();
+					}
+					return true;
+				} else {
+					throw new Error(`HTTP代理响应异常: ${responseText.split('\r\n')[0]}`);
+				}
+			}
+		}
+	} finally {
+		reader.releaseLock();
+	}
+}
+function appendBuffer(buffer, newData) {
+	const newLength = buffer.length + newData.length;
+	if (buffer.length === 0) return newData;
+	const mergedBuffer = new Uint8Array(newLength);
+	mergedBuffer.set(buffer);
+	mergedBuffer.set(newData, buffer.length);
+	return mergedBuffer;
+}
+function findHeaderEnd(buffer) {
+	for (let i = 0; i < buffer.length - 3; i++) {
+		if (buffer[i] === 13 && buffer[i + 1] === 10 && buffer[i + 2] === 13 && buffer[i + 3] === 10) {
+			return i;
+		}
+	}
+	return -1;
+}
+async function httpConnect(remoteHost, remotePort, log) {
+	const { hostname, port, username, password } = parsedSocks5Address; // 共用socks5解析函数
+	log(`准备使用HTTP代理 ${hostname}:${port} 连接 ${remoteHost}:${remotePort}`);
+	const sock = await connect({ hostname, port });
+	const request = buildConnectRequest(remoteHost, remotePort, username, password);
+	await sendRequest(sock, request);
+	const success = await readResponse(sock);
+	if (!success) throw new Error('HTTP代理连接失败');
+	log(`HTTP连接 ${remoteHost}:${remotePort} 成功！`);
+	return sock;
 }
 
 async function remoteSocketToWS(remoteSocket, webSocket, vRspnHeader = null, retry, log) {
@@ -986,4 +1046,57 @@ function extractUrlParams(url, defaultMaxNodeMap, encodeFields = ['pwdPassword']
 	}
 
 	return rawParams;
+}
+
+// 优先级：path > env; socks5 > http > pyip > nat64
+function parseConnetMode(path, env, codeDefaultSOCKS, codeDefaultHTTP, codeDefaultPYIP, codeDefaultNAT64) {
+	let socksAddr = env.SOCKS5 || codeDefaultSOCKS;
+	let httpAddr = env.HTTP || codeDefaultHTTP;
+	let pyipStr = env.LANDING_ADDRESS || codeDefaultPYIP;
+	let nat64Addr = env.NAT64 || codeDefaultNAT64;
+
+	const hasSocks = path.includes('/socks=');
+	const hasHttpMath = path.match(/\/(https?)=([^/]+)/i); // 不区分 `http://` 和 `https://`
+	const hasPyIp = path.includes('/pyip='); // 支持以逗号隔开的多个值，后面随机选一个
+	const hasNat64 = path.includes('/nat='); // 不区分是否有 => "/96" => 自动去掉"/"以及其后面的内容
+
+	let enableSocks = false;
+	let enableHttp = false;
+	let enableNat = false;
+	let parsedLandingAddress = { hostname: null, port: 443 };
+	let parsedSocks5Address = {};
+
+	if (hasSocks) {
+		let socksAddr = path.split('/socks=')[1];
+		parsedSocks5Address = socks5AddressParser(socksAddr);
+		enableSocks = true;
+	} else if (hasHttpMath) {
+		let httpAddr = hasHttpMath[2];
+		parsedSocks5Address = socks5AddressParser(httpAddr);
+		enableHttp = true;
+	} else if (hasPyIp) {
+		let pyAddr = path.split('/pyip=')[1];
+		let arr = pyAddr.split(',');
+		let randomIndex = Math.floor(Math.random() * arr.length);
+		let choiceAddr = arr[randomIndex].trim();
+		parsedLandingAddress = hostPortParser(choiceAddr);
+	} else if (hasNat64) {
+		nat64Addr = path.split('/nat=')[1];
+		enableNat = true; // 从path中传入该参数，就强制开启nat64
+	} else if (socksAddr) {
+		parsedSocks5Address = socks5AddressParser(socksAddr);
+		enableSocks = true;
+	} else if (httpAddr) {
+		parsedSocks5Address = socks5AddressParser(httpAddr);
+		enableHttp = true;
+	} else if (pyipStr) {
+		let arr = pyipStr.split(',');
+		let randomIndex = Math.floor(Math.random() * arr.length);
+		let choiceAddr = arr[randomIndex].trim();
+		parsedLandingAddress = hostPortParser(choiceAddr);
+	}
+	let nat64IPv6Prefix = nat64Addr.split("/")[0];
+
+	// 注意：返回的 parsedSocks5Address 是 socks5 还是 HTTP 取决于后面的 enableSocks 和 enableHttp
+	return { parsedSocks5Address, parsedLandingAddress, nat64IPv6Prefix, enableSocks, enableHttp, enableNat };
 }

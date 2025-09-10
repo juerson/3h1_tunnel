@@ -149,9 +149,10 @@ function socks5AddressParser(address) {
 // src/worker-基础版.js
 var userID = "61098bdc-b734-4874-9e87-d18b1ef1cfaf";
 var sha224Password = "b379f280b9a4ce21e465cb31eea09a8fe3f4f8dd1850d9f630737538";
-var landingAddress = "";
-var socks5Address = "";
-var nat64IPv6Prefix = `${["2001", "67c", "2960", "6464"].join(":")}::`;
+var codeDefaultSOCKS = "";
+var codeDefaultHTTP = "";
+var codeDefaultPYIP = "";
+var codeDefaultNAT64 = `${["2602", "fc59", "b0", "64"].join(":")}::`;
 var s5Lock = false;
 var allowedRules = ["0.0.0.0/0", "::/0"];
 var domainList = [
@@ -167,9 +168,12 @@ var domainList = [
   "https://hdtodayz.to",
   "https://radar.cloudflare.com"
 ];
-var parsedLandingAddress = { hostname: null, port: 443 };
 var parsedSocks5Address = {};
+var parsedLandingAddress = { hostname: null, port: 443 };
+var nat64IPv6Prefix = "";
 var enableSocks = false;
+var enableHttp = false;
+var enableNat = false;
 var worker_default = {
   async fetch(request, env, ctx) {
     try {
@@ -183,9 +187,6 @@ var worker_default = {
       })();
       const raw = (env.ALLOWED_RULES ?? "").trim().split(/[, \n\r\t]+/).map((x) => x.trim()).filter(Boolean);
       allowedRules = raw.length > 0 ? raw : ["0.0.0.0/0", "::/0"];
-      let landingAddr = env.LANDING_ADDRESS || landingAddress;
-      let socks5Addr = env.SOCKS5 || socks5Address;
-      nat64IPv6Prefix = env.NAT64 || nat64IPv6Prefix;
       const url = new URL(request.url);
       const path = url.pathname;
       const upgradeHeader = request.headers.get("Upgrade");
@@ -198,26 +199,10 @@ var worker_default = {
       } else {
         parsedSocks5Address = {};
         enableSocks = false;
-        if (path.includes("/pyip=")) {
-          landingAddr = path.split("/pyip=")[1];
-          enableSocks = false;
-        } else if (path.includes("/socks=")) {
-          socks5Addr = path.split("/socks=")[1];
-          enableSocks = true;
-        }
-        if (socks5Addr) {
-          parsedSocks5Address = socks5AddressParser(socks5Addr);
-        } else if (landingAddr) {
-          let poxyaddr = "";
-          if (landingAddr.includes(",")) {
-            const arr = landingAddr.split(",");
-            const randomIndex = Math.floor(Math.random() * arr.length);
-            poxyaddr = arr[randomIndex].trim();
-          } else {
-            poxyaddr = landingAddr.trim();
-          }
-          parsedLandingAddress = hostPortParser(poxyaddr);
-        }
+        enableHttp = false;
+        enableNat = false;
+        let connectData = parseConnetMode(path, env, codeDefaultSOCKS, codeDefaultHTTP, codeDefaultPYIP, codeDefaultNAT64);
+        ({ parsedSocks5Address, parsedLandingAddress, nat64IPv6Prefix, enableSocks, enableHttp, enableNat } = connectData);
         return await handleWebSocket(request);
       }
     } catch (err) {
@@ -251,9 +236,7 @@ async function handleWebSocket(request) {
   const webSocketReadableStream = makeWebSocketReadableStream(webSocket, earlyDataHeader, log);
   let isDns = false;
   let udpStreamWrite = null;
-  let remoteSocketWrapper = {
-    value: null
-  };
+  let remoteSocketWrapper = { value: null };
   const clearHandshakeTimer = startHandshakeTimeout({
     webSocket,
     remoteSocketWrapper,
@@ -498,13 +481,13 @@ function parseSkc0swodahsHeader(buffer) {
   const view = new DataView(buffer);
   const addrType = view.getUint8(0);
   let address = "", offset = 1;
-  const textDecoder = new TextDecoder();
+  const textDecoder2 = new TextDecoder();
   if (addrType === 1) {
     address = Array.from(new Uint8Array(buffer.slice(1, 5))).join(".");
     offset = 5;
   } else if (addrType === 3) {
     const len = view.getUint8(1);
-    address = textDecoder.decode(buffer.slice(2, 2 + len));
+    address = textDecoder2.decode(buffer.slice(2, 2 + len));
     offset = 2 + len;
   } else if (addrType === 4) {
     const parts = [];
@@ -527,8 +510,8 @@ function parseSkc0swodahsHeader(buffer) {
 }
 async function handleTCPOutbds(remoteSocket, headerInfo, webSocket, log) {
   const { addressType, addressRemote, portRemote, rawClientData, responseHeader: vResponseHeader } = headerInfo;
-  async function connectAndWrite(address, port, socks = false) {
-    const tcpSocket2 = socks ? await socks5Connect(addressType, address, port, log) : connect({ hostname: address, port });
+  async function connectAndWrite(address, port, { socks = false, http = false } = {}) {
+    const tcpSocket2 = socks ? await socks5Connect(addressType, address, port, log) : http ? await httpConnect(address, port, log) : connect({ hostname: address, port });
     log(`connected to ${address}:${port}`);
     remoteSocket.value = tcpSocket2;
     const writer = tcpSocket2.writable.getWriter();
@@ -537,8 +520,9 @@ async function handleTCPOutbds(remoteSocket, headerInfo, webSocket, log) {
     return tcpSocket2;
   }
   async function retry() {
-    if (enableSocks) {
-      tcpSocket = await connectAndWrite(addressRemote, portRemote, true);
+    let opt = enableSocks ? { socks: true } : enableHttp ? { http: true } : {};
+    if (enableSocks || enableHttp) {
+      tcpSocket = await connectAndWrite(addressRemote, portRemote, opt);
     } else {
       const { address, port } = await resolveTargetAddress(addressRemote, portRemote);
       tcpSocket = await connectAndWrite(address, port);
@@ -550,7 +534,7 @@ async function handleTCPOutbds(remoteSocket, headerInfo, webSocket, log) {
   remoteSocketToWS(tcpSocket, webSocket, vResponseHeader, retry, log);
 }
 async function resolveTargetAddress(addressRemote, portRemote, serverAddr = parsedLandingAddress) {
-  if (serverAddr?.hostname) {
+  if (!enableNat && serverAddr?.hostname) {
     return {
       address: serverAddr.hostname,
       port: serverAddr.port || portRemote
@@ -646,6 +630,82 @@ async function socks5Connect(addressType, addressRemote, portRemote, log) {
   writer.releaseLock();
   reader.releaseLock();
   return socket;
+}
+var textEncoder = new TextEncoder();
+var textDecoder = new TextDecoder();
+function buildConnectRequest(host, port, username, password) {
+  const headers = [
+    `CONNECT ${host}:${port} HTTP/1.1`,
+    `Host: ${host}:${port}`,
+    `User-Agent: Mozilla/5.0 (Windows NT10.0; Win64; x64) AppleWebKit/537.36`,
+    `Proxy-Connection: keep-alive`,
+    `Connection: keep-alive`
+  ];
+  if (username && password) {
+    const auth = btoa(`${username}:${password}`);
+    headers.push(`Proxy-Authorization: Basic ${auth}`);
+  }
+  return headers.join("\r\n") + "\r\n\r\n";
+}
+async function sendRequest(sock, request) {
+  const writer = sock.writable.getWriter();
+  await writer.write(textEncoder.encode(request));
+  writer.releaseLock();
+}
+async function readResponse(sock) {
+  const reader = sock.readable.getReader();
+  let headerBuffer = new Uint8Array(0);
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error("HTTP\u8FDE\u63A5\u88AB\u4E2D\u65AD");
+      headerBuffer = appendBuffer(headerBuffer, value);
+      const headerEnd = findHeaderEnd(headerBuffer);
+      if (headerEnd !== -1) {
+        const responseText = textDecoder.decode(headerBuffer.slice(0, headerEnd));
+        if (/^HTTP\/1\.[01] 200/.test(responseText)) {
+          const body = headerBuffer.slice(headerEnd + 4);
+          if (body.length) {
+            const writer = sock.readable.getWriter();
+            writer.write(body);
+            writer.close();
+          }
+          return true;
+        } else {
+          throw new Error(`HTTP\u4EE3\u7406\u54CD\u5E94\u5F02\u5E38: ${responseText.split("\r\n")[0]}`);
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+function appendBuffer(buffer, newData) {
+  const newLength = buffer.length + newData.length;
+  if (buffer.length === 0) return newData;
+  const mergedBuffer = new Uint8Array(newLength);
+  mergedBuffer.set(buffer);
+  mergedBuffer.set(newData, buffer.length);
+  return mergedBuffer;
+}
+function findHeaderEnd(buffer) {
+  for (let i = 0; i < buffer.length - 3; i++) {
+    if (buffer[i] === 13 && buffer[i + 1] === 10 && buffer[i + 2] === 13 && buffer[i + 3] === 10) {
+      return i;
+    }
+  }
+  return -1;
+}
+async function httpConnect(remoteHost, remotePort, log) {
+  const { hostname, port, username, password } = parsedSocks5Address;
+  log(`\u51C6\u5907\u4F7F\u7528HTTP\u4EE3\u7406 ${hostname}:${port} \u8FDE\u63A5 ${remoteHost}:${remotePort}`);
+  const sock = await connect({ hostname, port });
+  const request = buildConnectRequest(remoteHost, remotePort, username, password);
+  await sendRequest(sock, request);
+  const success = await readResponse(sock);
+  if (!success) throw new Error("HTTP\u4EE3\u7406\u8FDE\u63A5\u5931\u8D25");
+  log(`HTTP\u8FDE\u63A5 ${remoteHost}:${remotePort} \u6210\u529F\uFF01`);
+  return sock;
 }
 async function remoteSocketToWS(remoteSocket, webSocket, vRspnHeader = null, retry, log) {
   let hasData = false, firstChunk = true, headerBuffer = vRspnHeader instanceof Uint8Array ? vRspnHeader : null;
@@ -821,6 +881,52 @@ function parseIPv6(ip) {
   let missing = 8 - (head.length + tail.length);
   let full = [...head, ...Array(missing).fill("0"), ...tail];
   return full.map((x) => parseInt(x || "0", 16));
+}
+function parseConnetMode(path, env, codeDefaultSOCKS2, codeDefaultHTTP2, codeDefaultPYIP2, codeDefaultNAT642) {
+  let socksAddr = env.SOCKS5 || codeDefaultSOCKS2;
+  let httpAddr = env.HTTP || codeDefaultHTTP2;
+  let pyipStr = env.LANDING_ADDRESS || codeDefaultPYIP2;
+  let nat64Addr = env.NAT64 || codeDefaultNAT642;
+  const hasSocks = path.includes("/socks=");
+  const hasHttpMath = path.match(/\/(https?)=([^/]+)/i);
+  const hasPyIp = path.includes("/pyip=");
+  const hasNat64 = path.includes("/nat=");
+  let enableSocks2 = false;
+  let enableHttp2 = false;
+  let enableNat2 = false;
+  let parsedLandingAddress2 = { hostname: null, port: 443 };
+  let parsedSocks5Address2 = {};
+  if (hasSocks) {
+    let socksAddr2 = path.split("/socks=")[1];
+    parsedSocks5Address2 = socks5AddressParser(socksAddr2);
+    enableSocks2 = true;
+  } else if (hasHttpMath) {
+    let httpAddr2 = hasHttpMath[2];
+    parsedSocks5Address2 = socks5AddressParser(httpAddr2);
+    enableHttp2 = true;
+  } else if (hasPyIp) {
+    let pyAddr = path.split("/pyip=")[1];
+    let arr = pyAddr.split(",");
+    let randomIndex = Math.floor(Math.random() * arr.length);
+    let choiceAddr = arr[randomIndex].trim();
+    parsedLandingAddress2 = hostPortParser(choiceAddr);
+  } else if (hasNat64) {
+    nat64Addr = path.split("/nat=")[1];
+    enableNat2 = true;
+  } else if (socksAddr) {
+    parsedSocks5Address2 = socks5AddressParser(socksAddr);
+    enableSocks2 = true;
+  } else if (httpAddr) {
+    parsedSocks5Address2 = socks5AddressParser(httpAddr);
+    enableHttp2 = true;
+  } else if (pyipStr) {
+    let arr = pyipStr.split(",");
+    let randomIndex = Math.floor(Math.random() * arr.length);
+    let choiceAddr = arr[randomIndex].trim();
+    parsedLandingAddress2 = hostPortParser(choiceAddr);
+  }
+  let nat64IPv6Prefix2 = nat64Addr.split("/")[0];
+  return { parsedSocks5Address: parsedSocks5Address2, parsedLandingAddress: parsedLandingAddress2, nat64IPv6Prefix: nat64IPv6Prefix2, enableSocks: enableSocks2, enableHttp: enableHttp2, enableNat: enableNat2 };
 }
 export {
   worker_default as default
