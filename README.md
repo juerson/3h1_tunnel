@@ -151,13 +151,13 @@ ip.sb
 
 在v2rayN中，单独修改path的值，指定socks、http、pyip、nat值；也可以在singbox、clash订阅中，修改对应节点path键的值。
 
-**socks/http支持的格式：**user:pass@host:port、host:port
+**socks/http支持的格式：** user:pass@host:port、host:port
 
-**pyip支持的格式：**ipv4、ipv4:port、[ipv6]、[ipv6]:port、domain.com、sub1.domain.com、sub2.sub1.domain.com、subN..sub1.domain.com (没有端口，默认使用443端口，其它端口需要写出来；它就是源码中LANDING_ADDRESS变量值，大家公认的PROXYIP)
+**pyip支持的格式：** ipv4、ipv4:port、[ipv6]、[ipv6]:port、domain.com、sub1.domain.com、sub2.sub1.domain.com、subN..sub1.domain.com (没有端口，默认使用443端口，其它端口需要写出来；它就是源码中LANDING_ADDRESS变量值，大家公认的PROXYIP)
 
-**nat支持的格式：**例如`2602:fc59:11:64::`、`2602:fc59:11:64::/96`
+**nat支持的格式：** 例如`2602:fc59:11:64::`、`2602:fc59:11:64::/96`
 
-**优先级：**path > env；SOCKS5 > HTTP > LANDING_ADDRESS > NAT64
+**优先级：** path > env；SOCKS5 > HTTP > LANDING_ADDRESS > NAT64
 
 ### 1、SOCKS5、HTTP的path
 
