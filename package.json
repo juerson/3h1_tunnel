@@ -4,10 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "deploy": "npm run build && wrangler deploy _worker.js",
+    "build": "node build.js",
     "dev": "wrangler dev",
     "start": "wrangler dev",
-    "build": "node build.js"
+    "deploy": "npm run build && wrangler deploy",
+    "deploy:sub": "npm run build && wrangler deploy _worker.js",
+    "test": "node --import ./test/register.mjs test/run.mjs",
+    "test:ss2022": "node test/ss2022-protocol.mjs",
+    "test:e2e": "node test/e2e-check.mjs",
+    "test:size": "node test/compare-size.mjs"
   },
   "devDependencies": {
     "@jridgewell/sourcemap-codec": "^1.5.0",

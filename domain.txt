@@ -1,11 +1,4 @@
 www.visa.com.sg
-mitchell.ns.cloudflare.com
-carioca.ns.cloudflare.com
-irma.ns.cloudflare.com
-carioca.ns.cloudflare.com
-irma.ns.cloudflare.com
-jaziel.ns.cloudflare.com
-mitchell.ns.cloudflare.com
 www.visa.com
 cis.visa.com
 africa.visa.com
@@ -134,7 +127,6 @@ onesignal.com
 mmcdn.com
 xnxx.health
 toyhou.se
-av19.gg
 simpli.fi
 digitaloceanspaces.com
 garmin.com

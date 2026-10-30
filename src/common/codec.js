@@ -1,4 +1,34 @@
-export function sha224Encrypt(str) {
+/**
+ * 编解码与摘要工具。
+ *
+ * 纯函数，无副作用，不依赖任何运行时特有能力。
+ */
+
+/**
+ * 将UTF8字符串进行Base64编码
+ *
+ * 该函数，适合bytes数组长度过大（如超过数万个字节）的，
+ * 已解决了 "RangeError: Maximum call stack size exceeded" 错误，
+ * 也就是该函数解决了超出调用栈的最大限制错误
+ * @param {*} str
+ * @returns
+ */
+export function base64Encode(str) {
+	let encoder = new TextEncoder();
+	let bytes = encoder.encode(str);
+	let binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join('');
+	return btoa(binary);
+}
+
+// base64解密
+export function base64Decode(base64Str) {
+	let binary = atob(base64Str);
+	let bytes = new Uint8Array([...binary].map((char) => char.charCodeAt(0)));
+	let decoder = new TextDecoder();
+	return decoder.decode(bytes);
+}
+
+export function sha224(str) {
 	if (typeof str !== 'string') throw new TypeError('sha224Encrypt: input must be a string');
 
 	const K = [1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221, 3624381080, 310598401,

@@ -1,4 +1,4 @@
-将`_worker.js`（订阅版、完整版）或`_worker_基础版.js`代码托管到CF的Workers或Pages后，按照下面内容操作。
+将`_worker.js`（订阅版、完整版）或`_worker-基础版.js`代码托管到CF的Workers或Pages后，按照下面内容操作。
 
 ## 一、CF中，设置环境变量
 
@@ -6,10 +6,10 @@
 
 | **变量名称** | **说明**                                                     |
 | --------------- | ------------------------------------------------------------ |
-| UUID4           | 【必选】用于Vless协议的userID，例如：61098bdc-b734-4874-9e87-d18b1ef1cfaf |
-| USERPWD         | 【可选】用于Trojan协议的password，在环境变量中设置，没有设置就是采用上面设置那个UUID4 |
-| ENABLED_S5      | 【可选】用于开启Shadowsocks协议，默认是关闭，不能使用它，慎用，由于无密码认证，域名一旦泄露，别人会盗用你的CF Workers使用量，除非限制那个IP使用，启用它的有效值范围：['1', 'true', 'yes', 'on'] |
-| ALLOWED_RULES   | 【可选】只用于控制Shadowsocks协议，白名单，允许哪个IP或哪些IP连接使用（默认所有IP），可输入纯IPv4/IPv6地址，精准匹配，也可以输入CIDR，允许这个范围内的IP使用（eg. "104.28.100.123,104.28.100.0/24"，可以输入多个） |
+| UUID4           | 【必选】Vless协议的userID，例如：61098bdc-b734-4874-9e87-d18b1ef1cfaf |
+| USERPWD         | 【可选】Trojan、Shadowsocks协议的密码(2022-blake3-aes-128-gcm)，例如：yQ0wV0N1K3xir9WmJ8YOZQ== |
+| ENABLED_S5      | 【可选】开启Shadowsocks协议（默认是关闭），不能使用它，启用它的有效值范围：['1', 'true', 'yes', 'on'] |
+| ALLOWED_RULES   | 【可选】控制Shadowsocks协议（默认所有IP），白名单内IP可以使用，支持纯IPv4/IPv6地址，精准匹配，也支持CIDR，该范围内的IP使用（eg. "104.28.100.123,104.28.100.0/24"，可以输入多个） |
 
 - 表2：控制使用哪个外部代理，访问CF无法访问的网站
 
@@ -31,8 +31,8 @@
 
 | **变量名称(订阅版)** | 说明                                                         |
 | -------------------- | ------------------------------------------------------------ |
-| CONFIG_PASSWORD      | 【非必须】默认无密码。不填密码，会被其他人知道你的节点信息，`https://your_worker_domain/config?pwd={CONFIG_PASSWORD}` |
-| SUB_PASSWORD         | 【非必须】默认无密码。不填密码，会被其他人知道你的节点信息，`https://your_worker_domain/sub?pwd={SUB_PASSWORD}` |
+| CONFIG_PASSWORD      | 【非必须】默认无密码。不填密码，会被其他人知道你的节点信息，`https://your_worker_domain/config?pwd={CONFIG_PASSWORD}` ，默认61098bdc-b734-4874-9e87-d18b1ef1cfaf |
+| SUB_PASSWORD         | 【非必须】默认无密码。不填密码，会被其他人知道你的节点信息，`https://your_worker_domain/sub?pwd={SUB_PASSWORD}`，默认61098bdc-b734-4874-9e87-d18b1ef1cfaf |
 | GITHUB_TOKEN         | 【非必须】Github token                                       |
 | GITHUB_OWNER         | 【非必须】GitHub 仓库拥有者                                  |
 | GITHUB_REPO          | 【非必须】GitHub 仓库名                                      |
@@ -232,29 +232,58 @@ src/worker.js -----------|=> dist/worker.js
 
 src/worker-基础版.js -----|=> dist/worker-基础版.js
 			             |=> _worker-基础版.js
+
+src/worker-流控版.js -----|=> dist/worker-流控版.js
+			             |=> _worker-流控版.js
 ```
 
-2、路径`src/`下所有代码为开发中写的源代码，大部代码根据[@zizifn](https://github.com/zizifn/edgetunnel)、[@ca110us](https://github.com/ca110us/epeius)、[@FoolVPN-ID](https://github.com/FoolVPN-ID/Nautica)、[@cmliu](https://github.com/cmliu/edgetunnel)修改而来，如果不是开发者，使用 `_wokers.js` 或`_worker_基础版.js`的代码，简单修改一下前面提到的环境变量，部署到CF wokers或pages就可以使用。
+两个入口共用 `src/core/` 下的同一份实现，差别只有「是否提供订阅页面」。
+`npm run build` 一次构建全部入口；`npm run dev` 与 `npm run deploy` 都以 `wrangler.toml` 的 `main` 为准。
+
+源码按职责分三个目录：
+
+```txt
+src/core/          WebSocket 隧道核心（两个入口共用）
+src/subscription/  订阅相关（路由 + 渲染），只被 src/worker.js 使用
+src/common/        纯工具函数（地址 / 编解码 / 抓取 / 流）
+```
+
+```bash
+npm run build     # 构建全部入口
+npm run dev       # 本地调试
+npm run deploy    # 部署基础版（wrangler.toml 的 main）
+npm run deploy:sub  # 部署订阅版单文件产物（_worker.js）
+npm test          # 差分回归测试：重构前后逐字段比对
+npm run test:e2e  # 真实隧道端到端冒烟（需要先 npm run dev）
+npm run test:size # 重构前后产物体积对比
+```
+
+> 注意：把 `_worker.js` 拖到 CF **Pages** 上部署时，CF 会自动识别根目录的这个文件，
+> 得到的是**订阅版**；而 `npm run deploy` 走的是 `wrangler.toml` 的 `main`，得到的是**基础版**。
+> 两条路径产出的是不同的 Worker，请按需选择。
+
+2、路径`src/`下所有代码为开发中写的源代码，大部代码根据[@zizifn](https://github.com/zizifn/edgetunnel)、[@ca110us](https://github.com/ca110us/epeius)、[@FoolVPN-ID](https://github.com/FoolVPN-ID/Nautica)、[@cmliu](https://github.com/cmliu/edgetunnel)修改而来，如果不是开发者，使用 `_worker.js` 或 `_worker-基础版.js` 的代码，简单修改一下前面提到的环境变量，部署到CF wokers或pages就可以使用。
 
 3、部署时，有几率遇到Error 1101错误，建议将原js代码进行混淆，如果js混淆后，依然无法解决问题，就等开发者遇到该问题且有时间再解决这个问题。
 
 <img src="images\Error 1101.png" style="zoom:50%;" />
 
-4、shadowsocks协议的，如果启用使用，可以手动安照下面配置，只靠tls加密保护上网数据
+4、shadowsocks协议的，只支持`2022-blake3-aes-128-gcm`加密的，可使用git bash命令生成，自带openssl命令生成
 
-<img src="images\ss.png" style="zoom: 67%;" />
+```bash
+openssl rand -base64 16
+```
 
-**问题初步解决**：
+<img src="images\git_bash命令在win11的位置.png" style="zoom:50%;" />
 
-已经添加 env.ALLOWED_RULES 值，可以在CF后台添加 **ALLOWED_RULES** 变量值，允许哪些IP、CIDR连接使用，启用该协议，默认所有IP都能使用。
+可额外在cf后台，添加**ENABLED_S5** 启用该协议， 添加**ALLOWED_RULES** 允许哪些IP、CIDR连接使用，默认所有IP都能使用该协议。
 
-如果你电脑使用的公网IP是固定，就直接输入你的公网IP；如果你的IP会跳动，看规律，是否在CIDR范围内跳动，尽可能缩小CIDR范围，也可以输入多个值，用逗号隔开。一定要写正确，不要写错，代码没有严谨检测逻辑，那个逻辑增大CPU的消耗量，本来就经常出现“Worker exceeded CPU time limit.”问题（可能跟它没有关系）。
+```
+ENABLED_S5 = true
+ALLOWED_RULES = "104.28.100.123,104.28.100.0/24"
+```
 
-除了这个限制IP方法，还有其它邪修方法，比如，通过自定义**User-Agent**请求头，隐藏暗语，只有自己知道，无视IP和地区，后来发现各个代理客户端设置的**User-Agent**请求头各不同，还有的不知道哪里设置，手搓yaml/json配置？而且请求头信息是透明（使用加密，怎么加密？改v2rayN等客户端？），浪费脑细胞，都不能真正解决问题。
-
-5、待解决问题：Worker exceeded CPU time limit.
-
-超出10毫秒的限制：https://developers.cloudflare.com/workers/platform/limits/#cpu-time
+5、_worker-流控版.js 指 vless-vision-ws-tls，由于xray、sing-box核心都不支持，要魔改sing-box才能使用，具体见另一个文档说明。
 
 ## 五、免责声明
 

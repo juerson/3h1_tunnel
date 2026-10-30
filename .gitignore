@@ -1,6 +1,17 @@
 history
 dist/README.md
 dist/worker.js.map
+dist/worker-基础版.js.map
+dist/worker-流控版.js.map
+.codeartsdoer
+.refactor-baseline
+.merkle-snapshot.json
+test
+
+# 差分测试的临时产物（基线源码本身是纳入版本管理的回归基准，不要忽略）
+.refactor-baseline/clean/
+.refactor-baseline/orig/
+
 
 # Logs
 

@@ -15,18 +15,18 @@ function splitArrayByMaxSize(array, maxChunkSize) {
 /**
  * 看成将一个大的ips数组转换二维数组，然后根据page数，决定取哪一组数据返回
  * @param {*} ipsArray 全部ips的数组
- * @param {*} maxNode 想要多少个节点，超出upperLimit范围采用默认的数值defaultCount
+ * @param {*} maxItem 想要多少个条目，超出upperLimit范围采用默认的数值defaultCount
  * @param {*} page 取第几页的数据,数值index从零开始，这个已经处理成从第1开始
  * @param {*} upperLimit 限制最大上限数，防止无休止取一个很大值（无意义）
- * @param {*} defaultCount 当用户传入的最大节点数不在指定范围，那么这个数就起作用
+ * @param {*} defaultCount 当用户传入的最大条目数不在指定范围，那么这个数就起作用
  * @returns 返回一个含有多个IP或域名的数组
  */
-export function ipsPaging(ipsArray, maxNode, page, upperLimit = 500, defaultCount = 300) {
+export function pageItems(ipsArray, maxItem, page, upperLimit = 500, defaultCount = 300) {
 	if (!Array.isArray(ipsArray)) {
 		return { hasError: true, message: '输入数据不是有效的数组' };
 	}
 
-	let max = maxNode > 0 && maxNode <= upperLimit ? maxNode : defaultCount;
+	let max = maxItem > 0 && maxItem <= upperLimit ? maxItem : defaultCount;
 	let chunkedArray = splitArrayByMaxSize(ipsArray, max);
 	let totalPage = chunkedArray.length;
 
@@ -34,15 +34,14 @@ export function ipsPaging(ipsArray, maxNode, page, upperLimit = 500, defaultCoun
 		return { hasError: true, message: '数据为空，或者没有该页数，数据过少远达不到这个页码！' };
 	}
 	let data = chunkedArray[page - 1]; // page从1开始，所以需要减1
-	console.log(`当前页码：${page}，总页数：${totalPage}，每页最大节点数：${max}`);
 
 	return { chunkedIPs: data, totalPage };
 }
 
-// ————————————————————————  PROXYIP 和 SOCKS5 地址解析 ————————————————————————
+// ————————————————————————  中转地址 和 relay 地址解析 ————————————————————————
 
  // 解析主机名和端口号，也就是[host][:port]的主机名和端口号，注意：ipv6保留[]，并且传入时也要带[]
-export function hostPortParser(s) {
+export function parseHostPort(s) {
 	const v = (x) => {
 		x = +x;
 		return x >= 1 && x <= 65535 ? x : 443;
@@ -61,22 +60,22 @@ export function hostPortParser(s) {
 	return { hostname: h, port: p };
 }
 
-// 解析SOCKS5地址格式，支持user:pass@host:port和:@host:port两种形式
-export function socks5AddressParser(address) {
+// 解析relay地址格式，支持user:pass@host:port和:@host:port两种形式
+export function parseRelayAddr(address) {
 	let [latter, former] = address.split('@').reverse();
 	let username, password, hostname, port;
 	if (former) {
 		const formers = former.split(':');
-		if (formers.length !== 2) throw new Error('Invalid SOCKS address format');
+		if (formers.length !== 2) throw new Error('Invalid relay address format');
 		[username, password] = formers;
 	}
 	const latters = latter.split(':');
 	port = Number(latters.pop());
-	if (isNaN(port)) throw new Error('Invalid SOCKS address format');
+	if (isNaN(port)) throw new Error('Invalid relay address format');
 	hostname = latters.join(':');
 	const regex = /^\[.*\]$/;
 	if (hostname.includes(':') && !regex.test(hostname)) {
-		throw new Error('Invalid SOCKS address format');
+		throw new Error('Invalid relay address format');
 	}
 	return { username, password, hostname, port };
 }
@@ -124,7 +123,7 @@ function getRandomIndexes(n, size) {
 	}
 	return arr.slice(0, size);
 }
-export function generateIPsFromCIDR(cidr, maxCount = 1000, ratio = 4) {
+export function genAddrsFromCIDR(cidr, maxCount = 1000, ratio = 4) {
 	try {
 		if (!isValidCIDR(cidr)) return [];
 		if (!Number.isInteger(maxCount) || maxCount <= 0) return [];
