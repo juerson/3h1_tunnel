@@ -5,7 +5,7 @@ log-level: info
 external-controller: 127.0.0.1:9097
 dns:
   enable: true
-  ipv6: false
+  ipv6: true
   listen: 0.0.0.0:53
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
@@ -28,6 +28,7 @@ dns:
     - https://dns.alidns.com/dns-query
     - https://doh.pub/dns-query
   fallback:
+    - 8.8.8.8
     - https://dns.google/dns-query
     - https://1.1.1.1/dns-query
   fallback-filter:
