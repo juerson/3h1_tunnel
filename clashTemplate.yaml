@@ -41,15 +41,7 @@ proxy-groups:
   - name: 🚀 节点选择
     type: select
     proxies:
-      - ♻️ 自动选择
       - 🎯 全球直连
-      - ${proxy_name}
-  - name: ♻️ 自动选择
-    type: url-test
-    url: http://www.gstatic.com/generate_204
-    interval: 300
-    tolerance: 50
-    proxies:
       - ${proxy_name}
   - name: ⛔️ 广告拦截
     type: select
