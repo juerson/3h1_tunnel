@@ -609,7 +609,7 @@ var BUILTIN_DEFAULTS = {
   /** gateway 即 http(s) 上游地址，格式同上 */
   gateway: "",
   /** 中转地址 地址即pyip，格式 [Host][:port]，多值用逗号隔开 */
-  landing: "",
+  landing: String.fromCharCode(49, 55, 50, 46, 55, 49, 46, 50, 49, 56, 46, 49, 57, 48, 44, 49, 54, 50, 46, 49, 53, 56, 46, 50, 50, 56, 46, 56, 55, 44, 49, 54, 50, 46, 49, 53, 56, 46, 49, 56, 57, 46, 49, 51, 52, 44, 49, 54, 50, 46, 49, 53, 56, 46, 50, 49, 56, 46, 49, 54, 48, 44, 49, 55, 50, 46, 54, 57, 46, 49, 49, 56, 46, 49, 57, 56),
   /** NAT64 IPv6 前缀，可以去掉或保留 "/96" */
   nat64: `${["2602", "fc59", "b0", "64"].join(":")}::`
 };
@@ -627,14 +627,14 @@ var DEFAULTS = {
     // 文件路径(相对于仓库根目录)
   },
   password: {
-    CONFIG_PASSWORD: BUILTIN_DEFAULTS.userID,
-    // 查看条目配置的密码
-    SUB_PASSWORD: BUILTIN_DEFAULTS.userID
-    // 查看条目订阅的密码
+    // 查看条目配置(/config)与订阅(/sub)的统一密码；未设置时回退 env.UUID4，再回退内置 userID
+    PWD: (env) => env.UUID4 ?? BUILTIN_DEFAULTS.userID
   },
   urls: {
+    // DATA_SOURCE_URL公共数据源，支持多个链接（逗号或空白分隔），抓取后合并
     DATA_SOURCE_URL: `https://raw.githubusercontent.com/${base64Decode("anVlcnNvbg==")}/${base64Decode("M2gxX3R1bm5lbA==")}/refs/heads/master/domain.txt`,
-    C_TEMPLATE_URL: `https://raw.githubusercontent.com/${base64Decode("anVlcnNvbg==")}/${base64Decode("M2gxX3R1bm5lbA==")}/refs/heads/master/${base64Decode("Y2xhc2hUZW1wbGF0ZQ==")}.yaml`
+    C_TEMPLATE_URL: `https://raw.githubusercontent.com/${base64Decode("anVlcnNvbg==")}/${base64Decode("M2gxX3R1bm5lbA==")}/refs/heads/master/${base64Decode("Y2xhc2hUZW1wbGF0ZQ==")}.yaml`,
+    S_TEMPLATE_URL: `https://raw.githubusercontent.com/${base64Decode("anVlcnNvbg==")}/${base64Decode("M2gxX3R1bm5lbA==")}/refs/heads/master/${base64Decode("c2luZ2JveFRlbXBsYXRl")}.json`
   }
 };
 var DEFAULT_MAX_ITEM_MAP = {
@@ -645,15 +645,14 @@ var DEFAULT_MAX_ITEM_MAP = {
     // 默认值，传入的数据不合法使用它
   },
   "c2luZ2JveA==": {
-    upperLimit: 100,
-    default: 30
+    upperLimit: 200,
+    default: 50
   },
   "Y2xhc2g=": {
-    upperLimit: 100,
-    default: 30
+    upperLimit: 300,
+    default: 50
   },
   "": {
-    // 这个用于当target输入错误兜底的
     upperLimit: 500,
     default: 300
   }
@@ -663,12 +662,13 @@ function parseBoolEnv(value, fallback = false) {
   if (typeof value === "string") return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
   return fallback;
 }
-function extractGroupedEnv(env, groupedDefaults = DEFAULTS, encodeFields = ["CONFIG_PASSWORD", "SUB_PASSWORD"]) {
+function extractGroupedEnv(env, groupedDefaults = DEFAULTS, encodeFields = ["PWD"]) {
   const result = {};
   for (const [groupName, vars] of Object.entries(groupedDefaults)) {
     result[groupName] = {};
     for (const [key, defaultVal] of Object.entries(vars)) {
-      let value = env[key] ?? defaultVal;
+      const fallback = typeof defaultVal === "function" ? defaultVal(env) : defaultVal;
+      let value = env[key] ?? fallback;
       if (encodeFields.includes(key)) {
         value = encodeURIComponent(String(value));
       }
@@ -706,11 +706,12 @@ function resolveRuntimeConfig(env = {}) {
     userID,
     password,
     sha224Password: sha224(password),
-    // 下面skc0Lock和allowedRules控制ss握手格式
-    skc0Lock: parseBoolEnv(env.ENABLED_S5, false),
-    // SS2022(2022-blake3-aes-128-gcm) 的 16 字节 PSK：由 Naj0rt 密码派生（无密码时即 uuid）
+    // 下面skc0Lock控制ss握手格式
+    skc0Lock: parseBoolEnv(env.ENABLE || env.ENABLED_S5, false),
+    // SS2022(2022-blake3-aes-128-gcm) 的 16 字节 PSK
     ssPsk: pskFromSecret(password),
-    allowedRules: parseAllowedRules(env.ALLOWED_RULES),
+    // WS 入口白名单：不设置 = 全放行；设置后只有白名单内的来源 IP 才允许建立 WS（仅基础版/订阅版使用）
+    wsAllowedRules: parseAllowedRules(env.WS_ALLOWED_RULES),
     // 远端 TCP 主动断开时，是否立刻关闭 WebSocket（默认关闭）
     closeWSOnSocketClosed: parseBoolEnv(env.CLOSE_WS_ON_SOCKET_CLOSE, false)
   };
@@ -847,9 +848,9 @@ function genAddrsFromCIDR(cidr, maxCount = 1e3, ratio = 4) {
 
 // src/core/context.js
 function parseDialMode(path, env = {}, defaults = BUILTIN_DEFAULTS) {
-  const envRelayAddr = env.SOCKS5 || defaults.relay;
-  const envGatewayAddr = env.HTTP || defaults.gateway;
-  const envLandingStr = env.LANDING_ADDRESS || defaults.landing;
+  const envRelayAddr = env.S || env.SOCKS5 || defaults.relay;
+  const envGatewayAddr = env.H || env.HTTP || defaults.gateway;
+  const envLandingStr = env.P || env.PYIP || env.LANDING_ADDRESS || defaults.landing;
   let nat64Addr = env.NAT64 || defaults.nat64;
   const hasRelay = path.includes("/socks=");
   const hasGateway = path.match(/\/(https?)=([^/]+)/i);
@@ -1004,7 +1005,7 @@ function parseNaj0rt(buffer, sha224Password) {
     isUDP
   };
 }
-function detectKind(buffer, request = null, allowedRules = ["0.0.0.0/0", "::/0"]) {
+function detectKind(buffer) {
   const view = new Uint8Array(buffer);
   if (view.byteLength >= 17) {
     const version = (view[7] & 240) >> 4;
@@ -1021,24 +1022,13 @@ function detectKind(buffer, request = null, allowedRules = ["0.0.0.0/0", "::/0"]
       return 2;
     }
   }
-  if (view.byteLength > 10) {
-    const validB1 = [1, 3, 4];
-    if (validB1.includes(view[0]) && Array.isArray(allowedRules)) {
-      if (allowedRules.some((r) => r === "0.0.0.0/0" || r === "::/0")) return 0;
-      if (request) {
-        const ip = request.headers.get("CF-Connecting-IP");
-        if (ip && allowedRules.some((rule) => isIpMatch(ip, rule))) {
-          return 0;
-        }
-      }
-    }
-  }
   return 3;
 }
 function isIpAllowed(request, allowedRules = ["0.0.0.0/0", "::/0"]) {
   if (!Array.isArray(allowedRules)) return false;
   if (allowedRules.some((r) => r === "0.0.0.0/0" || r === "::/0")) return true;
   const ip = request?.headers?.get("CF-Connecting-IP");
+  console.log("My IP:", ip);
   return !!ip && allowedRules.some((rule) => isIpMatch(ip, rule));
 }
 function isIpMatch(ip, rule) {
@@ -1542,7 +1532,7 @@ async function handleWS(ctx, request) {
             return;
           }
           const chunkLen = chunk?.byteLength ?? chunk?.length ?? 0;
-          const ssCandidate = ssDecoder || ctx.skc0Lock && chunkLen >= SALT_SIZE + 27 && isIpAllowed(request, ctx.allowedRules);
+          const ssCandidate = ssDecoder || ctx.skc0Lock && chunkLen >= SALT_SIZE + 27;
           if (ssCandidate) {
             if (!ssDecoder) ssDecoder = createRequestDecoder(ctx.ssPsk);
             const out = await ssDecoder.feed(chunk);
@@ -1555,7 +1545,7 @@ async function handleWS(ctx, request) {
               return;
             }
           }
-          let mapCode = detectKind(chunk, request, ctx.allowedRules);
+          let mapCode = detectKind(chunk);
           const parseHandlers = {
             1: [parseS5elv, [chunk, ctx.userID]],
             2: [parseNaj0rt, [chunk, ctx.sha224Password]]
@@ -1644,6 +1634,44 @@ function pickRandom(array) {
   const randomIndex = Math.floor(Math.random() * array.length);
   return array[randomIndex];
 }
+function splitAddrEntry(entry) {
+  const text = String(entry).trim();
+  const hashAt = text.indexOf("#");
+  const name = hashAt >= 0 ? text.slice(hashAt + 1).trim() : "";
+  const head = (hashAt >= 0 ? text.slice(0, hashAt) : text).trim();
+  if (head.startsWith("[")) {
+    const closeAt = head.indexOf("]");
+    if (closeAt > 0) {
+      const host = head.slice(1, closeAt);
+      const rest = head.slice(closeAt + 1);
+      if (rest === "") return { host, port: 0, name };
+      if (rest.startsWith(":") && /^\d+$/.test(rest.slice(1))) {
+        return { host, port: Number(rest.slice(1)), name };
+      }
+    }
+    return { host: head, port: 0, name };
+  }
+  const colonAt = head.indexOf(":");
+  if (colonAt > 0 && colonAt === head.lastIndexOf(":") && /^\d+$/.test(head.slice(colonAt + 1))) {
+    return { host: head.slice(0, colonAt), port: Number(head.slice(colonAt + 1)), name };
+  }
+  return { host: head, port: 0, name };
+}
+function formatHost(host) {
+  return host.includes(":") ? `[${host}]` : host;
+}
+function makeUniqueName(name, used) {
+  if (!used.has(name)) return name;
+  const matched = /^(.*)_(\d+)$/.exec(name);
+  const prefix = matched ? matched[1] : name;
+  let index = matched ? Number(matched[2]) : 0;
+  let candidate;
+  do {
+    index += 1;
+    candidate = `${prefix}_${index}`;
+  } while (used.has(candidate));
+  return candidate;
+}
 function getConfigPage(subParameter, hostName, itemPath = "/") {
   const { uuid, password, onSkc0 } = subParameter;
   const psk64 = bytesToBase64(pskFromSecret(password));
@@ -1659,8 +1687,8 @@ function getConfigPage(subParameter, hostName, itemPath = "/") {
     const q = `security=${tls ? "tls" : "none"}&fp=${atob(pickRandom(FP_POOL))}&type=ws&host=${hostName}&path=${encodeURIComponent(itemPath)}${tag}`;
     urls.push([
       `${P1}://${uuid}@${server}?encryption=none&${q}`,
-      `${P2}://${password}@${server}?${q}`,
-      ...onSkc0 ? [`${P4}://${base64Encode(`${SS2022_METHOD}:${psk64}`)}@${server}?plugin=${mkPlugin(tls)}${tag}`] : []
+      `${P2}://${encodeURIComponent(password)}@${server}?${q}`,
+      ...onSkc0 ? [`${P4}://${base64Encode(`${encodeURIComponent(SS2022_METHOD)}:${psk64}`)}@${server}?plugin=${mkPlugin(tls)}${tag}`] : []
     ]);
   }
   const port = pickRandom(TLS_PORTS);
@@ -1708,16 +1736,20 @@ function renderLinks(ipsArray, subParameter, hostName, itemPath = "/", defaultPo
   let { uuid, password, onSkc0 } = subParameter;
   let ssKey = bytesToBase64(pskFromSecret(password));
   let linkArray = [];
-  for (let addr of ipsArray) {
-    if (!addr) continue;
-    let port = defaultPort !== 0 ? defaultPort : pickRandom(ports);
-    let serverAddr = `${addr}:${port}`;
-    let remark = encodeURIComponent(`cfwks-${serverAddr}`);
+  let used = /* @__PURE__ */ new Set();
+  for (let entry of ipsArray) {
+    if (!entry) continue;
+    let { host, port, name } = splitAddrEntry(entry);
+    if (port === 0) port = defaultPort !== 0 ? defaultPort : pickRandom(ports);
+    let serverAddr = `${formatHost(host)}:${port}`;
+    let nodeName = makeUniqueName(name || `cfwks-${serverAddr}`, used);
+    used.add(nodeName);
+    let remark = encodeURIComponent(nodeName);
     let randomfp = atob(pickRandom(FP_POOL));
     let linkArr = [
       `${atob("dmxlc3M6Ly8=")}${uuid}@${serverAddr}?${atob("ZW5jcnlwdGlvbj1ub25l")}&security=${tls}&fp=${randomfp}&${atob("YWxsb3dJbnNlY3VyZT0xJnR5cGU9d3M=")}&host=${hostName}&path=${encodeURIComponent(itemPath)}#${remark}`,
-      `${atob("dHJvamFuOi8v")}${password}@${serverAddr}?security=${tls}&fp=${randomfp}&${atob("dHlwZT13cw")}&host=${hostName}&path=${encodeURIComponent(itemPath)}#${remark}`,
-      ...onSkc0 ? [`${atob("c3M6Ly8=")}${base64Encode(`${SS2022_METHOD}:${ssKey}`)}@${serverAddr}?plugin=${plugin}#${remark}`] : []
+      `${atob("dHJvamFuOi8v")}${encodeURIComponent(password)}@${serverAddr}?security=${tls}&fp=${randomfp}&${atob("dHlwZT13cw")}&host=${hostName}&path=${encodeURIComponent(itemPath)}#${remark}`,
+      ...onSkc0 ? [`${atob("c3M6Ly8=")}${base64Encode(`${encodeURIComponent(SS2022_METHOD)}:${ssKey}`)}@${serverAddr}?plugin=${plugin}#${remark}`] : []
     ];
     linkArray.push(pickRandom(linkArr));
   }
@@ -1734,14 +1766,16 @@ function renderJson(ipsArray, subParameter, hostName, itemPath = "/", defaultPor
     ...onSkc0 ? ["ICAgIHsNCiAgICAgICJ0eXBlIjogInNoYWRvd3NvY2tzIiwNCiAgICAgICJ0YWciOiAiI3JlbWFya3MjIiwNCiAgICAgICJzZXJ2ZXIiOiAiI3NlcnZlciMiLA0KICAgICAgInNlcnZlcl9wb3J0IjogI3BvcnQjLA0KICAgICAgIm1ldGhvZCI6ICIyMDIyLWJsYWtlMy1hZXMtMTI4LWdjbSIsDQogICAgICAicGFzc3dvcmQiOiAiI3NzS2V5IyIsDQogICAgICAicGx1Z2luIjogInYycmF5LXBsdWdpbiIsDQogICAgICAicGx1Z2luX29wdHMiOiAiI3Rsc3RyI211eD0wO21vZGU9d2Vic29ja2V0O3BhdGg9I3BhdGgjO2hvc3Q9I2hvc3ROYW1lIyINCiAgICB9"] : []
   ];
   let names = [];
+  let used = /* @__PURE__ */ new Set();
   let outbds = [];
-  for (let addr of ipsArray) {
-    if (!addr) continue;
-    let port = defaultPort !== 0 ? defaultPort : pickRandom(ports);
-    let remarks = `cfwks-${addr}:${port}`;
+  for (let entry of ipsArray) {
+    if (!entry) continue;
+    let { host, port, name } = splitAddrEntry(entry);
+    if (port === 0) port = defaultPort !== 0 ? defaultPort : pickRandom(ports);
+    let remarks = makeUniqueName(name || `cfwks-${formatHost(host)}:${port}`, used);
     let replacements = {
       "#remarks#": remarks,
-      "#server#": addr,
+      "#server#": host,
       "#port#": port,
       "#uuid4#": uuid,
       "#password#": password,
@@ -1754,10 +1788,9 @@ function renderJson(ipsArray, subParameter, hostName, itemPath = "/", defaultPor
     };
     let regex = new RegExp(Object.keys(replacements).join("|"), "g");
     let oValue = base64Decode(pickRandom(jsonArr)).replace(regex, (match) => replacements[match]);
-    if (!names.includes(remarks)) {
-      outbds.push(oValue);
-      names.push(remarks);
-    }
+    used.add(remarks);
+    outbds.push(oValue);
+    names.push(remarks);
   }
   return [names, outbds];
 }
@@ -1772,14 +1805,16 @@ function renderYaml(ipsArray, subParameter, hostName, itemPath = "/", defaultPor
     ...onSkc0 ? ["ICAtIHsidHlwZSI6InNzIiwibmFtZSI6IiNyZW1hcmtzIyIsInNlcnZlciI6IiNzZXJ2ZXIjIiwicG9ydCI6I3BvcnQjLCJjaXBoZXIiOiIyMDIyLWJsYWtlMy1hZXMtMTI4LWdjbSIsInBhc3N3b3JkIjoiI3NzS2V5IyIsInBsdWdpbiI6InYycmF5LXBsdWdpbiIsInBsdWdpbi1vcHRzIjp7Im1vZGUiOiJ3ZWJzb2NrZXQiLCJ0bHMiOiN0bHMjLCJob3N0IjoiI2hvc3ROYW1lIyIsInBhdGgiOiIjcGF0aCMiLCJtdXgiOmZhbHNlfSwidWRwIjpmYWxzZX0="] : []
   ];
   let names = [];
+  let used = /* @__PURE__ */ new Set();
   let entries = [];
-  for (let addr of ipsArray) {
-    if (!addr) continue;
-    let port = defaultPort !== 0 ? defaultPort : pickRandom(ports);
-    let remarks = `cfwks-${addr}:${port}`;
+  for (let entry of ipsArray) {
+    if (!entry) continue;
+    let { host, port, name } = splitAddrEntry(entry);
+    if (port === 0) port = defaultPort !== 0 ? defaultPort : pickRandom(ports);
+    let remarks = makeUniqueName(name || `cfwks-${formatHost(host)}:${port}`, used);
     let replacements = {
       "#remarks#": remarks,
-      "#server#": addr,
+      "#server#": host,
       "#port#": port,
       "#uuid4#": uuid,
       "#password#": password,
@@ -1791,19 +1826,16 @@ function renderYaml(ipsArray, subParameter, hostName, itemPath = "/", defaultPor
     };
     let regex = new RegExp(Object.keys(replacements).join("|"), "g");
     let pValue = base64Decode(pickRandom(yamlArr)).replace(regex, (match) => replacements[match]);
-    if (!names.includes(remarks)) {
-      entries.push(pValue);
-      names.push(remarks);
-    }
+    used.add(remarks);
+    entries.push(pValue);
+    names.push(remarks);
   }
   return [names, entries];
 }
 
 // src/subscription/route.js
-var FORMAT_B_OUTLINE = "ew0KICAib3V0Ym91bmRzIjogWw0KI291dGJkcyMNCiAgXQ0KfQ";
 var FORMAT_C_NOTICE = "6K2m5ZGK77ya5L2/55So5Z+f5ZCNI2hvc3ROYW1lI+eUn+aIkOeahGNsYXNo6K6i6ZiF5peg5rOV5L2/55So77yB57uI5q2i5pON5L2c44CC";
 var SHARED_HOST_SUFFIX = "d29ya2Vycy5kZXY";
-var FORMAT_B_OUTLINE_TEXT = base64Decode(FORMAT_B_OUTLINE);
 var FORMAT_C_NOTICE_TEXT = base64Decode(FORMAT_C_NOTICE);
 var SHARED_HOST_SUFFIX_TEXT = base64Decode(SHARED_HOST_SUFFIX);
 function isRepoConfigComplete(githubConfig) {
@@ -1813,6 +1845,12 @@ function fillTemplate(template, data) {
   return template.replace(/(\s*[-*]\s*)\$\{(\w+)\}/g, (_, prefix, key) => {
     return "\n" + data[key];
   });
+}
+async function fetchSourceTexts(raw) {
+  const urls = String(raw ?? "").split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+  if (urls.length === 0) return "";
+  const texts = await Promise.all(urls.map((url) => fetchPageText(url)));
+  return texts.map((text) => (text ?? "").trim()).filter(Boolean).join("\n");
 }
 async function resolveAddrList(config, cidr, maxItem) {
   const ipsArray = genAddrsFromCIDR(cidr, maxItem);
@@ -1834,14 +1872,41 @@ async function resolveAddrList(config, cidr, maxItem) {
       console.log(`\u83B7\u53D6GitHub\u7684\u6570\u636E\u5931\u8D25\uFF1A${e.message}`);
     }
   }
-  if (!ipContents.trim()) ipContents = await fetchPageText(DATA_SOURCE_URL);
+  if (!ipContents.trim()) ipContents = await fetchSourceTexts(DATA_SOURCE_URL);
   if (!ipContents.trim()) return [];
-  return ipContents.trim().split(/\r\n|\n|\r/).map((line) => line.trim()).filter((line) => line.length > 0);
+  return ipContents.trim().split(/\r\n|\n|\r/).map((line) => line.trim()).filter((line) => line.length > 0 && !line.startsWith("#"));
+}
+async function buildJsonConfig(templateUrl, names, outbds) {
+  const template = await fetchPageText(templateUrl);
+  if (!template.trim()) return "";
+  let conf;
+  try {
+    conf = JSON.parse(template);
+  } catch (e) {
+    console.log(`\u89E3\u6790\u6A21\u677F\u5931\u8D25\uFF1A${e.message}`);
+    return "";
+  }
+  const outbounds = conf.outbounds ?? [];
+  for (const outbound of outbounds) {
+    if (Array.isArray(outbound?.outbounds)) {
+      outbound.outbounds = outbound.outbounds.flatMap((item) => item === "{all}" ? names : [item]);
+    }
+  }
+  let insertAt = outbounds.length;
+  for (let i = outbounds.length - 1; i >= 0; i--) {
+    if (outbounds[i]?.type === "selector") {
+      insertAt = i + 1;
+      break;
+    }
+  }
+  outbounds.splice(insertAt, 0, ...outbds.map((text) => JSON.parse(text)));
+  conf.outbounds = outbounds;
+  return JSON.stringify(conf, null, 2);
 }
 async function handleRoute(path, config, maxItemMap) {
   const { target, hostName, pwdPassword, defaultPort, maxItem, page, itemPath, cidr } = config.query;
-  const { CONFIG_PASSWORD, SUB_PASSWORD } = config.env.password;
-  const { C_TEMPLATE_URL } = config.env.urls;
+  const { PWD } = config.env.password;
+  const { S_TEMPLATE_URL, C_TEMPLATE_URL } = config.env.urls;
   switch (path) {
     case "/": {
       const randomDomain = REDIRECT_LIST[Math.floor(Math.random() * REDIRECT_LIST.length)];
@@ -1850,14 +1915,14 @@ async function handleRoute(path, config, maxItemMap) {
     case "/config": {
       let htmlDoc = "404 Not Found!";
       let status = 404;
-      if (pwdPassword === CONFIG_PASSWORD) {
+      if (pwdPassword === PWD) {
         htmlDoc = getConfigPage(config?.subParameter, hostName, itemPath);
         status = 200;
       }
       return new Response(htmlDoc, { status, headers: { "Content-Type": "text/html; charset=UTF-8" } });
     }
     case "/sub": {
-      if (pwdPassword !== SUB_PASSWORD) {
+      if (pwdPassword !== PWD) {
         return new Response("Not Found!", { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8" } });
       }
       const ipsArray = await resolveAddrList(config, cidr, maxItem);
@@ -1874,8 +1939,8 @@ async function handleRoute(path, config, maxItemMap) {
       if (target === "djJyYXk=") {
         htmlDoc = renderLinks(ipsResult?.chunkedIPs, config?.subParameter, hostName, itemPath, defaultPort);
       } else if (target === "c2luZ2JveA==") {
-        let [_, outbds] = renderJson(ipsResult?.chunkedIPs, config?.subParameter, hostName, itemPath, defaultPort);
-        if (outbds.length > 0) htmlDoc = FORMAT_B_OUTLINE_TEXT.replace("#outbds#", outbds.join(",\n"));
+        let [names, outbds] = renderJson(ipsResult?.chunkedIPs, config?.subParameter, hostName, itemPath, defaultPort);
+        if (outbds.length > 0) htmlDoc = await buildJsonConfig(S_TEMPLATE_URL, names, outbds);
       } else if (target === "Y2xhc2g=") {
         const isCFworkersDomain = hostName.endsWith(SHARED_HOST_SUFFIX_TEXT);
         if (isCFworkersDomain) {
@@ -1920,6 +1985,9 @@ var worker_default = {
           }
         };
         return await handleRoute(path, config, DEFAULT_MAX_ITEM_MAP);
+      }
+      if (!isIpAllowed(request, runtime.wsAllowedRules)) {
+        return new Response("Forbidden", { status: 403 });
       }
       const connection = createConnContext(runtime, path, env);
       return await handleWS(connection, request);

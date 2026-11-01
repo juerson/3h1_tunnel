@@ -19,6 +19,78 @@ function pickRandom(array) {
 	return array[randomIndex];
 }
 
+/**
+ * 解析数据源条目，兼容 `地址[:端口][#名称]` 形式。
+ *
+ * - `#` 之后的内容原样作为节点名称；没有 `#` 时名称为空串，交由调用方构建；
+ * - 主机后紧跟 `:` 且为纯数字时视为端口；没有端口时端口为 0，交由调用方生成；
+ * - IPv6 支持 `[ipv6]` / `[ipv6]:port` 写法，裸 IPv6（含多个冒号）按无端口处理。
+ *
+ * @param {string} entry 数据源中的一行
+ * @returns {{host: string, port: number, name: string}} host 不含方括号
+ */
+function splitAddrEntry(entry) {
+	const text = String(entry).trim();
+	const hashAt = text.indexOf('#');
+	const name = hashAt >= 0 ? text.slice(hashAt + 1).trim() : '';
+	const head = (hashAt >= 0 ? text.slice(0, hashAt) : text).trim();
+
+	// [ipv6] 或 [ipv6]:port
+	if (head.startsWith('[')) {
+		const closeAt = head.indexOf(']');
+		if (closeAt > 0) {
+			const host = head.slice(1, closeAt);
+			const rest = head.slice(closeAt + 1);
+			if (rest === '') return { host, port: 0, name };
+			if (rest.startsWith(':') && /^\d+$/.test(rest.slice(1))) {
+				return { host, port: Number(rest.slice(1)), name };
+			}
+		}
+		return { host: head, port: 0, name };
+	}
+
+	const colonAt = head.indexOf(':');
+	// 仅当只有一个冒号、且冒号后为纯数字时才按端口解析，避免把 IPv6 误判成端口
+	if (colonAt > 0 && colonAt === head.lastIndexOf(':') && /^\d+$/.test(head.slice(colonAt + 1))) {
+		return { host: head.slice(0, colonAt), port: Number(head.slice(colonAt + 1)), name };
+	}
+	return { host: head, port: 0, name };
+}
+
+/**
+ * 按 URL/配置要求格式化主机：IPv6（含冒号）需用方括号包裹，域名/IPv4 原样返回。
+ * @param {string} host 不含方括号的主机
+ * @returns {string}
+ */
+function formatHost(host) {
+	return host.includes(':') ? `[${host}]` : host;
+}
+
+/**
+ * 生成不与已用名称冲突的唯一节点名：重名时追加 `_n` 后缀。
+ *
+ * 若原名本身就以 `_数字` 结尾，则从该数字起继续累加（如 `x_2` → `x_3`），
+ * 加一仍冲突就再加一，直到不重复。
+ *
+ * @param {string} name 期望名称
+ * @param {Set<string>} used 已占用的名称集合
+ * @returns {string} 唯一名称
+ */
+function makeUniqueName(name, used) {
+	if (!used.has(name)) return name;
+
+	const matched = /^(.*)_(\d+)$/.exec(name);
+	const prefix = matched ? matched[1] : name;
+	let index = matched ? Number(matched[2]) : 0;
+
+	let candidate;
+	do {
+		index += 1;
+		candidate = `${prefix}_${index}`;
+	} while (used.has(candidate));
+	return candidate;
+}
+
 export function getConfigPage(subParameter, hostName, itemPath = "/") {
 	const { uuid, password, onSkc0 } = subParameter;
 	// 客户端密码 = base64(PSK)，与服务端 pskFromSecret(password) 对应
@@ -37,8 +109,8 @@ export function getConfigPage(subParameter, hostName, itemPath = "/") {
 		const q = `security=${tls ? "tls" : "none"}&fp=${atob(pickRandom(FP_POOL))}&type=ws&host=${hostName}&path=${encodeURIComponent(itemPath)}${tag}`;
 		urls.push([
 			`${P1}://${uuid}@${server}?encryption=none&${q}`,
-			`${P2}://${password}@${server}?${q}`,
-			...(onSkc0 ? [`${P4}://${base64Encode(`${SS2022_METHOD}:${psk64}`)}@${server}?plugin=${mkPlugin(tls)}${tag}`] : []),
+			`${P2}://${encodeURIComponent(password)}@${server}?${q}`,
+			...(onSkc0 ? [`${P4}://${base64Encode(`${encodeURIComponent(SS2022_METHOD)}:${psk64}`)}@${server}?plugin=${mkPlugin(tls)}${tag}`] : []),
 		]);
 	}
 
@@ -94,16 +166,20 @@ export function renderLinks(ipsArray, subParameter, hostName, itemPath = "/", de
 	let ssKey = bytesToBase64(pskFromSecret(password));
 
 	let linkArray = [];
-	for (let addr of ipsArray) {
-		if (!addr) continue;
-		let port = (defaultPort !== 0) ? defaultPort : pickRandom(ports);
-		let serverAddr = `${addr}:${port}`;
-		let remark = encodeURIComponent(`cfwks-${serverAddr}`);
+	let used = new Set();
+	for (let entry of ipsArray) {
+		if (!entry) continue;
+		let { host, port, name } = splitAddrEntry(entry);
+		if (port === 0) port = (defaultPort !== 0) ? defaultPort : pickRandom(ports);
+		let serverAddr = `${formatHost(host)}:${port}`;
+		let nodeName = makeUniqueName(name || `cfwks-${serverAddr}`, used);
+		used.add(nodeName);
+		let remark = encodeURIComponent(nodeName);
 		let randomfp = atob(pickRandom(FP_POOL));
 		let linkArr = [
 			`${atob("dmxlc3M6Ly8=")}${uuid}@${serverAddr}?${atob("ZW5jcnlwdGlvbj1ub25l")}&security=${tls}&fp=${randomfp}&${atob("YWxsb3dJbnNlY3VyZT0xJnR5cGU9d3M=")}&host=${hostName}&path=${encodeURIComponent(itemPath)}#${remark}`,
-			`${atob("dHJvamFuOi8v")}${password}@${serverAddr}?security=${tls}&fp=${randomfp}&${atob("dHlwZT13cw")}&host=${hostName}&path=${encodeURIComponent(itemPath)}#${remark}`,
-			...(onSkc0 ? [`${atob("c3M6Ly8=")}${base64Encode(`${SS2022_METHOD}:${ssKey}`)}@${serverAddr}?plugin=${plugin}#${remark}`] : []),
+			`${atob("dHJvamFuOi8v")}${encodeURIComponent(password)}@${serverAddr}?security=${tls}&fp=${randomfp}&${atob("dHlwZT13cw")}&host=${hostName}&path=${encodeURIComponent(itemPath)}#${remark}`,
+			...(onSkc0 ? [`${atob("c3M6Ly8=")}${base64Encode(`${encodeURIComponent(SS2022_METHOD)}:${ssKey}`)}@${serverAddr}?plugin=${plugin}#${remark}`] : []),
 		];
 		linkArray.push(pickRandom(linkArr));
 	}
@@ -123,14 +199,16 @@ export function renderJson(ipsArray, subParameter, hostName, itemPath = "/", def
 	];
 
 	let names = [];
+	let used = new Set();
 	let outbds = [];
-	for (let addr of ipsArray) {
-		if (!addr) continue;
-		let port = (defaultPort !== 0) ? defaultPort : pickRandom(ports);
-		let remarks = `cfwks-${addr}:${port}`;
+	for (let entry of ipsArray) {
+		if (!entry) continue;
+		let { host, port, name } = splitAddrEntry(entry);
+		if (port === 0) port = (defaultPort !== 0) ? defaultPort : pickRandom(ports);
+		let remarks = makeUniqueName(name || `cfwks-${formatHost(host)}:${port}`, used);
 		let replacements = {
 			'#remarks#': remarks,
-			'#server#': addr,
+			'#server#': host,
 			'#port#': port,
 			'#uuid4#': uuid,
 			'#password#': password,
@@ -143,10 +221,9 @@ export function renderJson(ipsArray, subParameter, hostName, itemPath = "/", def
 		};
 		let regex = new RegExp(Object.keys(replacements).join('|'), 'g');
 		let oValue = base64Decode(pickRandom(jsonArr)).replace(regex, (match) => replacements[match]);
-		if (!names.includes(remarks)) {
-			outbds.push(oValue);
-			names.push(remarks);
-		}
+		used.add(remarks);
+		outbds.push(oValue);
+		names.push(remarks);
 	}
 
 	return [names, outbds];
@@ -164,14 +241,16 @@ export function renderYaml(ipsArray, subParameter, hostName, itemPath = "/", def
 	];
 
 	let names = [];
+	let used = new Set();
 	let entries = [];
-	for (let addr of ipsArray) {
-		if (!addr) continue;
-		let port = (defaultPort !== 0) ? defaultPort : pickRandom(ports);
-		let remarks = `cfwks-${addr}:${port}`;
+	for (let entry of ipsArray) {
+		if (!entry) continue;
+		let { host, port, name } = splitAddrEntry(entry);
+		if (port === 0) port = (defaultPort !== 0) ? defaultPort : pickRandom(ports);
+		let remarks = makeUniqueName(name || `cfwks-${formatHost(host)}:${port}`, used);
 		let replacements = {
 			'#remarks#': remarks,
-			'#server#': addr,
+			'#server#': host,
 			'#port#': port,
 			'#uuid4#': uuid,
 			'#password#': password,
@@ -183,10 +262,9 @@ export function renderYaml(ipsArray, subParameter, hostName, itemPath = "/", def
 		};
 		let regex = new RegExp(Object.keys(replacements).join('|'), 'g');
 		let pValue = base64Decode(pickRandom(yamlArr)).replace(regex, (match) => replacements[match]);
-		if (!names.includes(remarks)) {
-			entries.push(pValue);
-			names.push(remarks);
-		}
+		used.add(remarks);
+		entries.push(pValue);
+		names.push(remarks);
 	}
 
 	return [names, entries];

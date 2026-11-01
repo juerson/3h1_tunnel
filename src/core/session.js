@@ -6,7 +6,7 @@
  */
 
 import { pipeSafely } from '../common/stream.js';
-import { detectKind, isIpAllowed, parseNaj0rt, parseS5elv } from './handshake.js';
+import { detectKind, parseNaj0rt, parseS5elv } from './handshake.js';
 import { createRequestDecoder, createResponseEncoderFactory, SALT_SIZE } from './ss2022.js';
 import { openChannel, pumpDNS } from './relay.js';
 import { makeWSStream, closeWS, setupKeepalive, startHelloTimer } from './lifecycle.js';
@@ -128,11 +128,11 @@ export async function handleWS(ctx, request) {
 					}
 
 					// ——— 握手阶段：优先尝试 SS2022 ———
-					// SS2022 首个字节是随机 salt，无法再靠「首字节」识别，改为白名单放行 + 试解密：
+					// SS2022 首个字节是随机 salt，无法靠「首字节」识别，改为直接试解密：
 					// 能通过 AEAD 认证的才算 ss，否则退回 CLI 协议探测（vless/trojan）。
 					// 首帧 ≥ salt(16)+固定头密文(27) 才值得试；一旦解码器已建立，则后续任何分片都继续喂给它。
 					const chunkLen = chunk?.byteLength ?? chunk?.length ?? 0;
-					const ssCandidate = ssDecoder || (ctx.skc0Lock && chunkLen >= SALT_SIZE + 27 && isIpAllowed(request, ctx.allowedRules));
+					const ssCandidate = ssDecoder || (ctx.skc0Lock && chunkLen >= SALT_SIZE + 27);
 					if (ssCandidate) {
 						if (!ssDecoder) ssDecoder = createRequestDecoder(ctx.ssPsk);
 						const out = await ssDecoder.feed(chunk);
@@ -146,7 +146,7 @@ export async function handleWS(ctx, request) {
 						}
 					}
 
-					let mapCode = detectKind(chunk, request, ctx.allowedRules);
+					let mapCode = detectKind(chunk);
 					const parseHandlers = {
 						1: [parseS5elv, [chunk, ctx.userID]],
 						2: [parseNaj0rt, [chunk, ctx.sha224Password]],

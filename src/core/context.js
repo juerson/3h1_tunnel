@@ -23,9 +23,9 @@ import { BUILTIN_DEFAULTS } from './config.js';
  * @returns {{relayAddr: object, landingAddr: object, nat64Prefix: string, enableRelay: boolean, enableGateway: boolean, enableNat: boolean}}
  */
 export function parseDialMode(path, env = {}, defaults = BUILTIN_DEFAULTS) {
-	const envRelayAddr = env.SOCKS5 || defaults.relay;
-	const envGatewayAddr = env.HTTP || defaults.gateway;
-	const envLandingStr = env.LANDING_ADDRESS || defaults.landing;
+	const envRelayAddr = env.S || env.SOCKS5 || defaults.relay;
+	const envGatewayAddr = env.H || env.HTTP || defaults.gateway;
+	const envLandingStr = env.P || env.PYIP || env.LANDING_ADDRESS || defaults.landing;
 	let nat64Addr = env.NAT64 || defaults.nat64;
 
 	const hasRelay = path.includes('/socks=');

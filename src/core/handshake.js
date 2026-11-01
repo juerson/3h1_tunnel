@@ -182,12 +182,14 @@ export function parseSkc0swodahs(buffer) {
 
 /**
  * 探测客户端使用的是哪种握手格式。
+ *
+ * 注意：SS2022(ss) 首包是随机 salt，无法按字节识别，因此这里不参与 ss 判定——
+ * ss 的识别与鉴权由 session.js 里的 AEAD 试解密完成。
+ *
  * @param {ArrayBuffer} buffer 客户端首包
- * @param {Request} request 用于取 CF-Connecting-IP
- * @param {string[]} allowedRules Skc0swodahs 类型的 IP 白名单
- * @returns {number} 0=ss 1=S5elv 2=Naj0rt 3=无法识别
+ * @returns {number} 1=S5elv 2=Naj0rt 3=无法识别
  */
-export function detectKind(buffer, request = null, allowedRules = ['0.0.0.0/0', '::/0']) {
+export function detectKind(buffer) {
 	const view = new Uint8Array(buffer);
 
 	// 检查 UUID（v4 或 v7） -> S5elv 类型
@@ -209,31 +211,13 @@ export function detectKind(buffer, request = null, allowedRules = ['0.0.0.0/0', 
 			return 2;
 		}
 	}
-	// Skc0swodahs 类型
-	if (view.byteLength > 10) {
-		const validB1 = [0x01, 0x03, 0x04];
-		// 由 IP 是否在白名单 allowedRules 中决定是否放行
-		if (validB1.includes(view[0]) && Array.isArray(allowedRules)) {
-			if (allowedRules.some((r) => r === '0.0.0.0/0' || r === '::/0')) return 0;
-			if (request) {
-				const ip = request.headers.get('CF-Connecting-IP');
-				if (ip && allowedRules.some((rule) => isIpMatch(ip, rule))) {
-					return 0;
-				}
-			}
-		}
-	}
 
 	return 3;
 }
 
 /**
  * 判断请求来源 IP 是否命中白名单。
- *
- * SS2022 的盐是随机字节，无法再像明文 ss 那样「按首字节猜测握手类型」，
- * 因此改为：白名单放行 → 尝试用 SS2022 解密，解密（AEAD 认证）通过才算 ss。
- * 这里只负责白名单这一步。
- *
+ * 
  * @param {Request} request 用于取 CF-Connecting-IP
  * @param {string[]} allowedRules IP/CIDR 白名单
  */
@@ -241,6 +225,7 @@ export function isIpAllowed(request, allowedRules = ['0.0.0.0/0', '::/0']) {
 	if (!Array.isArray(allowedRules)) return false;
 	if (allowedRules.some((r) => r === '0.0.0.0/0' || r === '::/0')) return true;
 	const ip = request?.headers?.get('CF-Connecting-IP');
+	console.log("My IP:", ip);
 	return !!ip && allowedRules.some((rule) => isIpMatch(ip, rule));
 }
 

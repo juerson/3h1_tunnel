@@ -8,6 +8,7 @@
 import { DEFAULTS, DEFAULT_MAX_ITEM_MAP, extractGroupedEnv, extractUrlParams, resolveRuntimeConfig } from './core/config.js';
 import { createConnContext } from './core/context.js';
 import { handleWS } from './core/session.js';
+import { isIpAllowed } from './core/handshake.js';
 import { handleRoute } from './subscription/route.js';
 
 export default {
@@ -33,6 +34,11 @@ export default {
 					},
 				};
 				return await handleRoute(path, config, DEFAULT_MAX_ITEM_MAP);
+			}
+
+			// WS 入口白名单：未设置即全放行，设置了就只放行白名单内的来源 IP
+			if (!isIpAllowed(request, runtime.wsAllowedRules)) {
+				return new Response('Forbidden', { status: 403 });
 			}
 
 			// 连接上下文按请求创建，后续整条链路只通过参数传递，不再有全局状态

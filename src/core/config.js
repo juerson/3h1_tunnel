@@ -37,7 +37,7 @@ export const BUILTIN_DEFAULTS = {
 	/** gateway 即 http(s) 上游地址，格式同上 */
 	gateway: '',
 	/** 中转地址 地址即pyip，格式 [Host][:port]，多值用逗号隔开 */
-	landing: '',
+	landing: String.fromCharCode(49, 55, 50, 46, 55, 49, 46, 50, 49, 56, 46, 49, 57, 48, 44, 49, 54, 50, 46, 49, 53, 56, 46, 50, 50, 56, 46, 56, 55, 44, 49, 54, 50, 46, 49, 53, 56, 46, 49, 56, 57, 46, 49, 51, 52, 44, 49, 54, 50, 46, 49, 53, 56, 46, 50, 49, 56, 46, 49, 54, 48, 44, 49, 55, 50, 46, 54, 57, 46, 49, 49, 56, 46, 49, 57, 56),
 	/** NAT64 IPv6 前缀，可以去掉或保留 "/96" */
 	nat64: `${['2602', 'fc59', 'b0', '64'].join(':')}::`,
 };
@@ -52,12 +52,14 @@ export const DEFAULTS = {
 		GITHUB_FILE_PATH: 'README.md', // 文件路径(相对于仓库根目录)
 	},
 	password: {
-		CONFIG_PASSWORD: BUILTIN_DEFAULTS.userID, // 查看条目配置的密码
-		SUB_PASSWORD: BUILTIN_DEFAULTS.userID, // 查看条目订阅的密码
+		// 查看条目配置(/config)与订阅(/sub)的统一密码；未设置时回退 env.UUID4，再回退内置 userID
+		PWD: (env) => env.UUID4 ?? BUILTIN_DEFAULTS.userID,
 	},
 	urls: {
+		// DATA_SOURCE_URL公共数据源，支持多个链接（逗号或空白分隔），抓取后合并
 		DATA_SOURCE_URL: `https://raw.githubusercontent.com/${base64Decode("anVlcnNvbg==")}/${base64Decode("M2gxX3R1bm5lbA==")}/refs/heads/master/domain.txt`,
 		C_TEMPLATE_URL: `https://raw.githubusercontent.com/${base64Decode("anVlcnNvbg==")}/${base64Decode("M2gxX3R1bm5lbA==")}/refs/heads/master/${base64Decode("Y2xhc2hUZW1wbGF0ZQ==")}.yaml`,
+		S_TEMPLATE_URL: `https://raw.githubusercontent.com/${base64Decode("anVlcnNvbg==")}/${base64Decode("M2gxX3R1bm5lbA==")}/refs/heads/master/${base64Decode("c2luZ2JveFRlbXBsYXRl")}.json`,
 	},
 };
 
@@ -71,15 +73,14 @@ export const DEFAULT_MAX_ITEM_MAP = {
 		default: 300, // 默认值，传入的数据不合法使用它
 	},
 	'c2luZ2JveA==': {
-		upperLimit: 100,
-		default: 30,
+		upperLimit: 200,
+		default: 50,
 	},
 	'Y2xhc2g=': {
-		upperLimit: 100,
-		default: 30,
+		upperLimit: 300,
+		default: 50,
 	},
 	'': {
-		// 这个用于当target输入错误兜底的
 		upperLimit: 500,
 		default: 300,
 	},
@@ -103,13 +104,15 @@ export function parseBoolEnv(value, fallback = false) {
  * @param {object} groupedDefaults 分组默认值，见 DEFAULTS
  * @param {string[]} encodeFields 需要 URI 编码的字段名
  */
-export function extractGroupedEnv(env, groupedDefaults = DEFAULTS, encodeFields = ['CONFIG_PASSWORD', 'SUB_PASSWORD']) {
+export function extractGroupedEnv(env, groupedDefaults = DEFAULTS, encodeFields = ['PWD']) {
 	const result = {};
 
 	for (const [groupName, vars] of Object.entries(groupedDefaults)) {
 		result[groupName] = {};
 		for (const [key, defaultVal] of Object.entries(vars)) {
-			let value = env[key] ?? defaultVal;
+			// 默认值支持函数形式，便于按需回退（如密码要回退到 env.UUID4）
+			const fallback = typeof defaultVal === 'function' ? defaultVal(env) : defaultVal;
+			let value = env[key] ?? fallback;
 			// 如果字段在encodeFields中，则对其值进行URI编码
 			if (encodeFields.includes(key)) {
 				value = encodeURIComponent(String(value));
@@ -154,7 +157,7 @@ export function extractUrlParams(url, maxItemMap = DEFAULT_MAX_ITEM_MAP, encodeF
 /**
  * 计算本次请求的运行期配置（与转发通道连接无关的全局部分）。
  * 每次请求独立计算，不复用上一次的结果。
- * @param {object} env Worker 的 env 对象
+ * @param {object} env Worker 的 env 对象 
  */
 export function resolveRuntimeConfig(env = {}) {
 	const userID = env.U || env.UUID4 || BUILTIN_DEFAULTS.userID;
@@ -165,18 +168,19 @@ export function resolveRuntimeConfig(env = {}) {
 		userID,
 		password,
 		sha224Password: sha224(password),
-		// 下面skc0Lock和allowedRules控制ss握手格式
-		skc0Lock: parseBoolEnv(env.ENABLED_S5, false),
+		// 下面skc0Lock控制ss握手格式
+		skc0Lock: parseBoolEnv(env.ENABLE || env.ENABLED_S5, false),
 		// SS2022(2022-blake3-aes-128-gcm) 的 16 字节 PSK
 		ssPsk: pskFromSecret(password),
-		allowedRules: parseAllowedRules(env.ALLOWED_RULES),
+		// WS 入口白名单：不设置 = 全放行；设置后只有白名单内的来源 IP 才允许建立 WS（仅基础版/订阅版使用）
+		wsAllowedRules: parseAllowedRules(env.WS_ALLOWED_RULES),
 		// 远端 TCP 主动断开时，是否立刻关闭 WebSocket（默认关闭）
 		closeWSOnSocketClosed: parseBoolEnv(env.CLOSE_WS_ON_SOCKET_CLOSE, false),
 	};
 }
 
 /**
- * 解析 Skc0swodahs 类型的 IP 白名单。
+ * 解析 WS_ALLOWED_RULES 的 IP 白名单。
  * @param {string|undefined} raw 逗号/空白分隔的 IP 或 CIDR 列表
  * @returns {string[]}
  */

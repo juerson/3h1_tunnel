@@ -15,19 +15,18 @@ enabled = false
 [vars]
 UUID4 = "61098bdc-b734-4874-9e87-d18b1ef1cfaf"     # vless，它优先于worker.js中的userID
 USERPWD = "yQ0wV0N1K3xir9WmJ8YOZQ=="               # trojan/ss(2022-blake3-aes-128-gcm)，没有设置这个值，就使用前面的UUID4，注意：ss必须要base64编码的字符串，使用 `openssl rand -base64 16` 命令生成
-ENABLED_S5 = "true"                                # ss，可选['1', 'true', 'yes', 'on']启用ss协议，没有设置该变量值，默认是关闭，慎用
-# ALLOWED_RULES = "0.0.0.0/0,::/0"                 # ss，允许哪个IP或哪些IP连接使用（默认所有IP），可输入纯IPv4/IPv6地址，精准匹配，也可以输入CIDR，允许这个范围内的IP使用
+ENABLE = "true"                                # ss，可选['1', 'true', 'yes', 'on']启用ss协议，没有设置该变量值，默认是关闭，慎用
+# WS_ALLOWED_RULES = "0.0.0.0/0,::/0"                            # 基础版/订阅版，WebSocket入口IP白名单（不设置=全放行）；设置后只有白名单内的IP才能建立WS连接，可输入纯IPv4/IPv6地址，精准匹配，也可输入CIDR
 # CLOSE_WS_ON_SOCKET_CLOSE = ""                    # 可选['1','true','yes','on']，远端 TCP 主动断开时立刻关闭 WebSocket（默认关闭；何时该开见 src/core/relay.js 里的使用说明）
 
 # 4种外部代理途径
 # SOCKS5 = ""                                      # 优先级：path > env (如果path中传入/nat=值就它优先级最高); SOCKS5 > HTTP > LANDING_ADDRESS > NAT64
 # HTTP = ""										   # 格式跟socks5一样的，共用一个账号信息解析函数；它就是古老的http://和https://代理形式，需去掉协议头字符串
-# LANDING_ADDRESS = ""                             # 等价于大家公认的PROXYIP
+# PYIP = ""                             # 等价于大家公认的PROXYIP
 # NAT64 = ""                                       # 既无设置socks5也无设置proxyip，就使用它兜底，NAT64地址的前缀
 
 # 订阅版-访问密码
-# CONFIG_PASSWORD = ""                             # 查看节点的配置信息的密码，默认使用61098bdc-b734-4874-9e87-d18b1ef1cfaf作密码
-# SUB_PASSWORD = ""                                # 查看节点的订阅内容的密码，默认使用61098bdc-b734-4874-9e87-d18b1ef1cfaf作密码
+PWD = "123"                                        # 查看节点配置(/config)与订阅(/sub)的统一密码；不填就默认使用 env.UUID4，再没有才用内置的 userID 作密码
 # 订阅版-用于访问GitHub的文件数据
 # GITHUB_TOKEN = ""                                # GitHub访问令牌，用于授权请求
 # GITHUB_OWNER = ""                                # GitHub仓库所有者的用户名
@@ -35,8 +34,9 @@ ENABLED_S5 = "true"                                # ss，可选['1', 'true', 'y
 # GITHUB_BRANCH = "main"                           # GitHub私有文件所在的分支名称
 # GITHUB_FILE_PATH = ""                            # GitHub私有文件路径(相对路径)，例如：README.md、yx.txt、cf/yx.txt等
 # 订阅版-ip地址数据源URL(要改就添加DATA_SOURCE_URL)
-# DATA_SOURCE_URL = ""                             # 既没有传入cidr参数值，也没有GitHub私有文件的数据，就使用这里的https://的txt文件数据
+DATA_SOURCE_URL = "https://bestcf.pages.dev/s5gy/all.txt"                             # 既没有传入cidr参数值，也没有GitHub私有文件的数据，就使用这里的https://的txt文件数据；可填多个链接，用逗号隔开，抓取后合并
 # C_TEMPLATE_URL = ""                              # clash模板文件地址
+# S_TEMPLATE_URL = ""                              # singbox模板文件地址
 
 # 流控版本
 # FLOW = "auto"									   # `auto`（默认）支持`flow:""` 与 `flow:"xtls-rprx-vision"`；`none` 只接受 `flow:""`，带参数不通；`vision` 只接受 flow:"xtls-rprx-vision"

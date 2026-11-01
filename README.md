@@ -7,9 +7,15 @@
 | **变量名称** | **说明**                                                     |
 | --------------- | ------------------------------------------------------------ |
 | UUID4           | 【必选】Vless协议的userID，例如：61098bdc-b734-4874-9e87-d18b1ef1cfaf |
-| USERPWD         | 【可选】Trojan、Shadowsocks协议的密码(2022-blake3-aes-128-gcm)，例如：yQ0wV0N1K3xir9WmJ8YOZQ== |
-| ENABLED_S5      | 【可选】开启Shadowsocks协议（默认是关闭），不能使用它，启用它的有效值范围：['1', 'true', 'yes', 'on'] |
-| ALLOWED_RULES   | 【可选】控制Shadowsocks协议（默认所有IP），白名单内IP可以使用，支持纯IPv4/IPv6地址，精准匹配，也支持CIDR，该范围内的IP使用（eg. "104.28.100.123,104.28.100.0/24"，可以输入多个） |
+| USERPWD         | 【必选】Trojan、ss协议的密码(2022-blake3-aes-128-gcm)，例如：yQ0wV0N1K3xir9WmJ8YOZQ== |
+| ENABLE      | 【可选】开启ss协议（默认是关闭），不能使用它，启用它的有效值范围：['1', 'true', 'yes', 'on'] |
+| WS_ALLOWED_RULES | 【可选】WebSocket入口IP白名单（默认所有IP，即不限制）。不设置=全放行；设置后只有白名单内的IP才能建立WS连接，三种协议都受限（支持纯IPv4/IPv6与CIDR，可多个）。仅基础版/订阅版生效，流控版不受影响 |
+
+注意：
+
+1、**USERPWD**：Trojan、ss协议都共用它，ss要16个字节的base64字符串，可使用`openssl rand -base64 16`命令生成。
+
+2、**WS_ALLOWED_RULES：**慎用，不知自己的地址就看CF后台的日志信息My IP，一旦写错，全部都上不了，还是有bug，检查到非自己的本地IP，致使全部连接不上？
 
 - 表2：控制使用哪个外部代理，访问CF无法访问的网站
 
@@ -17,7 +23,7 @@
 | ------------------ | ------------------------------------------------------------ |
 | SOCKS5             | 【可选】格式: user:pass@host:port、host:port。使用它绕过CF限制访问的网站 |
 | HTTP               | 【可选】同上，它就是网上常看到的`http(s)://1.2.3.4:8080`、`http://user:pass@host:port`代理，必须手动去掉`http(s)://`字符，GitHub上或一些网站有免费HTTP(S)代理列表，能否使用要亲测且有时效性 |
-| LANDING_ADDRESS    | 【可选】等价于大家公认的PROXYIP，换个名字(防止风控)，格式：(Sub-)Domain:PORT、IPv4:PORT、[IPv6]:PORT（没有端口，默认是443端口） |
+| PYIP               | 【可选】等价于大家公认的PROXYIP，换个名字(防止风控)，格式：(Sub-)Domain:PORT、IPv4:PORT、[IPv6]:PORT（没有端口，默认是443端口） |
 | NAT64              | 【可选】兜底的外部代理方式，支持`2602:fc59:11:64::`或`2602:fc59:11:64::/96`这两种格式 |
 |                    | 此表格前面那些变量值可以都不设置(包括代码中、节点path值中)，默认只能访问worker允许访问的有限非CF网站(如：Youtube、Google等) |
 
@@ -31,8 +37,7 @@
 
 | **变量名称(订阅版)** | 说明                                                         |
 | -------------------- | ------------------------------------------------------------ |
-| CONFIG_PASSWORD      | 【非必须】默认无密码。不填密码，会被其他人知道你的节点信息，`https://your_worker_domain/config?pwd={CONFIG_PASSWORD}` ，默认61098bdc-b734-4874-9e87-d18b1ef1cfaf |
-| SUB_PASSWORD         | 【非必须】默认无密码。不填密码，会被其他人知道你的节点信息，`https://your_worker_domain/sub?pwd={SUB_PASSWORD}`，默认61098bdc-b734-4874-9e87-d18b1ef1cfaf |
+| PWD                  | 【非必须】查看节点配置(/config)与订阅(/sub)的统一密码。不填会被其他人知道你的节点信息；不设置时默认使用 `env.UUID4`，再没有才用内置的 61098bdc-b734-4874-9e87-d18b1ef1cfaf。用法：`https://your_worker_domain/config?pwd={PWD}`、`https://your_worker_domain/sub?pwd={PWD}` |
 | GITHUB_TOKEN         | 【非必须】Github token                                       |
 | GITHUB_OWNER         | 【非必须】GitHub 仓库拥有者                                  |
 | GITHUB_REPO          | 【非必须】GitHub 仓库名                                      |
@@ -49,20 +54,20 @@
 - 使用例子
 
 ```
-https://your_worker_domain/config?pwd=123456  # 假如123456是CF后台中，环境变量CONFIG_PASSWORD设置的值
+https://your_worker_domain/config?pwd=123456  # 假如123456是CF后台中，环境变量PWD设置的值
 ```
 
 ### 2、怎么使用订阅
 
 | 参数   | 含义                                                         |
 | ------ | ------------------------------------------------------------ |
-| pwd    | 【必选/可选】查看订阅的密码，CF后台中，设置了SUB_PASSWORD变量值，就要传入pwd={SUB_PASSWORD} |
+| pwd    | 【必选/可选】查看订阅的密码，CF后台中设置了PWD变量值，就要传入pwd={PWD}（/config 与 /sub 共用同一个 PWD） |
 | target | 【必选】target=v2ray、singbox、clash，分别是v2ray分享链接的订阅、singbox的订阅、clash的订阅 |
 | page   | 【可选】页码，默认为1，如果DATA_SOURCE_URL/GitHub私有文件的静态文件，数据多，使用哪一页的数据订阅内容？ |
 | port   | 【可选】不采用随机端口（随机内置的几个端口的其中一个），而采用固定的端口值，写入订阅里节点的port中 |
 | path   | 【可选】修改节点的path值，不是更换打开订阅的路径，而是修改节点配置里面的path |
 | host   | 【可选】修改节点sni和host的值，仅用于修改订阅中sni和host值，不能使用它连接这个脚本进行代理 |
-| max    | 【可选】修改每页最多写多少个节点。v2ray链接默认为300，可选1-2000；clash默认为30，可选1-100；singbox默认为30，可选1~100。 |
+| max    | 【可选】修改每页最多写多少个节点。v2ray链接默认为300，可选1-2000；clash默认为50，可选1-200；singbox默认为50，可选1~300。 |
 | cidr   | 【可选】不使用从DATA_SOURCE_URL/GitHub私有文件获取的数据写入节点，而是使用从url传入的cidr参数值生成的唯一不重复IP地址写入节点。注意：只支持IPv4的CIDR。 |
 
 #### （1）v2ray订阅，使用例子：
@@ -102,7 +107,7 @@ https://your_worker_domain/sub?pwd=123456&target=clash&cidr=104.16.0.0/13  # 使
 
 1、前面那些参数可以随意组合，只要参数是前面表格中的，都可以全部使用。
 
-2、由于订阅DATA_SOURCE_URL链接的数据不是时刻维护/无私奉献分享给您，里面的地址可能不能使用，或者能使用，但是网速差的情况，就需要自己更新它，有需要的更改为自己的，或者使用下面的GitHub私有仓库解决。
+2、DATA_SOURCE_URL链接的数据支持`地址[:端口][#名称]` 形式[Link](https://raw.githubusercontent.com/Senflare/Senflare-IP/refs/heads/main/Senflare-Pro.txt)，单个`地址`也支持，里面的地址可能不能使用，或者能使用，但是网速差的情况，就需要自己更新它，有需要的更改为自己的，或者使用下面的GitHub私有仓库解决。
 
 ### 3、巧用GitHub的私有仓库，隐藏您搜集的反代IP和域名
 
@@ -237,7 +242,7 @@ src/worker-流控版.js -----|=> dist/worker-流控版.js
 			             |=> _worker-流控版.js
 ```
 
-两个入口共用 `src/core/` 下的同一份实现，差别只有「是否提供订阅页面」。
+前面两个入口共用 `src/core/` 下的同一份实现，差别只有「是否提供订阅页面」；最后一个是 「vless流控」无其他协议，无订阅。
 `npm run build` 一次构建全部入口；`npm run dev` 与 `npm run deploy` 都以 `wrangler.toml` 的 `main` 为准。
 
 源码按职责分三个目录：
@@ -259,8 +264,7 @@ npm run test:size # 重构前后产物体积对比
 ```
 
 > 注意：把 `_worker.js` 拖到 CF **Pages** 上部署时，CF 会自动识别根目录的这个文件，
-> 得到的是**订阅版**；而 `npm run deploy` 走的是 `wrangler.toml` 的 `main`，得到的是**基础版**。
-> 两条路径产出的是不同的 Worker，请按需选择。
+> 三条路径产出的是不同的 Worker，请按需选择。
 
 2、路径`src/`下所有代码为开发中写的源代码，大部代码根据[@zizifn](https://github.com/zizifn/edgetunnel)、[@ca110us](https://github.com/ca110us/epeius)、[@FoolVPN-ID](https://github.com/FoolVPN-ID/Nautica)、[@cmliu](https://github.com/cmliu/edgetunnel)修改而来，如果不是开发者，使用 `_worker.js` 或 `_worker-基础版.js` 的代码，简单修改一下前面提到的环境变量，部署到CF wokers或pages就可以使用。
 
@@ -276,11 +280,10 @@ openssl rand -base64 16
 
 <img src="images\git_bash命令在win11的位置.png" style="zoom:50%;" />
 
-可额外在cf后台，添加**ENABLED_S5** 启用该协议， 添加**ALLOWED_RULES** 允许哪些IP、CIDR连接使用，默认所有IP都能使用该协议。
+可额外在cf后台，添加**ENABLED_S5** 启用该协议，默认所有IP都能使用该协议。
 
 ```
-ENABLED_S5 = true
-ALLOWED_RULES = "104.28.100.123,104.28.100.0/24"
+ENABLE = true
 ```
 
 5、_worker-流控版.js 指 vless-vision-ws-tls，由于xray、sing-box核心都不支持，要魔改sing-box才能使用，具体见另一个文档说明。

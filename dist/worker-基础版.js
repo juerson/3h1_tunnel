@@ -597,7 +597,7 @@ var BUILTIN_DEFAULTS = {
   /** gateway 即 http(s) 上游地址，格式同上 */
   gateway: "",
   /** 中转地址 地址即pyip，格式 [Host][:port]，多值用逗号隔开 */
-  landing: "",
+  landing: String.fromCharCode(49, 55, 50, 46, 55, 49, 46, 50, 49, 56, 46, 49, 57, 48, 44, 49, 54, 50, 46, 49, 53, 56, 46, 50, 50, 56, 46, 56, 55, 44, 49, 54, 50, 46, 49, 53, 56, 46, 49, 56, 57, 46, 49, 51, 52, 44, 49, 54, 50, 46, 49, 53, 56, 46, 50, 49, 56, 46, 49, 54, 48, 44, 49, 55, 50, 46, 54, 57, 46, 49, 49, 56, 46, 49, 57, 56),
   /** NAT64 IPv6 前缀，可以去掉或保留 "/96" */
   nat64: `${["2602", "fc59", "b0", "64"].join(":")}::`
 };
@@ -615,14 +615,14 @@ var DEFAULTS = {
     // 文件路径(相对于仓库根目录)
   },
   password: {
-    CONFIG_PASSWORD: BUILTIN_DEFAULTS.userID,
-    // 查看条目配置的密码
-    SUB_PASSWORD: BUILTIN_DEFAULTS.userID
-    // 查看条目订阅的密码
+    // 查看条目配置(/config)与订阅(/sub)的统一密码；未设置时回退 env.UUID4，再回退内置 userID
+    PWD: (env) => env.UUID4 ?? BUILTIN_DEFAULTS.userID
   },
   urls: {
+    // DATA_SOURCE_URL公共数据源，支持多个链接（逗号或空白分隔），抓取后合并
     DATA_SOURCE_URL: `https://raw.githubusercontent.com/${base64Decode("anVlcnNvbg==")}/${base64Decode("M2gxX3R1bm5lbA==")}/refs/heads/master/domain.txt`,
-    C_TEMPLATE_URL: `https://raw.githubusercontent.com/${base64Decode("anVlcnNvbg==")}/${base64Decode("M2gxX3R1bm5lbA==")}/refs/heads/master/${base64Decode("Y2xhc2hUZW1wbGF0ZQ==")}.yaml`
+    C_TEMPLATE_URL: `https://raw.githubusercontent.com/${base64Decode("anVlcnNvbg==")}/${base64Decode("M2gxX3R1bm5lbA==")}/refs/heads/master/${base64Decode("Y2xhc2hUZW1wbGF0ZQ==")}.yaml`,
+    S_TEMPLATE_URL: `https://raw.githubusercontent.com/${base64Decode("anVlcnNvbg==")}/${base64Decode("M2gxX3R1bm5lbA==")}/refs/heads/master/${base64Decode("c2luZ2JveFRlbXBsYXRl")}.json`
   }
 };
 function parseBoolEnv(value, fallback = false) {
@@ -637,11 +637,12 @@ function resolveRuntimeConfig(env = {}) {
     userID,
     password,
     sha224Password: sha224(password),
-    // 下面skc0Lock和allowedRules控制ss握手格式
-    skc0Lock: parseBoolEnv(env.ENABLED_S5, false),
-    // SS2022(2022-blake3-aes-128-gcm) 的 16 字节 PSK：由 Naj0rt 密码派生（无密码时即 uuid）
+    // 下面skc0Lock控制ss握手格式
+    skc0Lock: parseBoolEnv(env.ENABLE || env.ENABLED_S5, false),
+    // SS2022(2022-blake3-aes-128-gcm) 的 16 字节 PSK
     ssPsk: pskFromSecret(password),
-    allowedRules: parseAllowedRules(env.ALLOWED_RULES),
+    // WS 入口白名单：不设置 = 全放行；设置后只有白名单内的来源 IP 才允许建立 WS（仅基础版/订阅版使用）
+    wsAllowedRules: parseAllowedRules(env.WS_ALLOWED_RULES),
     // 远端 TCP 主动断开时，是否立刻关闭 WebSocket（默认关闭）
     closeWSOnSocketClosed: parseBoolEnv(env.CLOSE_WS_ON_SOCKET_CLOSE, false)
   };
@@ -689,9 +690,9 @@ function parseRelayAddr(address) {
 
 // src/core/context.js
 function parseDialMode(path, env = {}, defaults = BUILTIN_DEFAULTS) {
-  const envRelayAddr = env.SOCKS5 || defaults.relay;
-  const envGatewayAddr = env.HTTP || defaults.gateway;
-  const envLandingStr = env.LANDING_ADDRESS || defaults.landing;
+  const envRelayAddr = env.S || env.SOCKS5 || defaults.relay;
+  const envGatewayAddr = env.H || env.HTTP || defaults.gateway;
+  const envLandingStr = env.P || env.PYIP || env.LANDING_ADDRESS || defaults.landing;
   let nat64Addr = env.NAT64 || defaults.nat64;
   const hasRelay = path.includes("/socks=");
   const hasGateway = path.match(/\/(https?)=([^/]+)/i);
@@ -846,7 +847,7 @@ function parseNaj0rt(buffer, sha224Password) {
     isUDP
   };
 }
-function detectKind(buffer, request = null, allowedRules = ["0.0.0.0/0", "::/0"]) {
+function detectKind(buffer) {
   const view = new Uint8Array(buffer);
   if (view.byteLength >= 17) {
     const version = (view[7] & 240) >> 4;
@@ -863,24 +864,13 @@ function detectKind(buffer, request = null, allowedRules = ["0.0.0.0/0", "::/0"]
       return 2;
     }
   }
-  if (view.byteLength > 10) {
-    const validB1 = [1, 3, 4];
-    if (validB1.includes(view[0]) && Array.isArray(allowedRules)) {
-      if (allowedRules.some((r) => r === "0.0.0.0/0" || r === "::/0")) return 0;
-      if (request) {
-        const ip = request.headers.get("CF-Connecting-IP");
-        if (ip && allowedRules.some((rule) => isIpMatch(ip, rule))) {
-          return 0;
-        }
-      }
-    }
-  }
   return 3;
 }
 function isIpAllowed(request, allowedRules = ["0.0.0.0/0", "::/0"]) {
   if (!Array.isArray(allowedRules)) return false;
   if (allowedRules.some((r) => r === "0.0.0.0/0" || r === "::/0")) return true;
   const ip = request?.headers?.get("CF-Connecting-IP");
+  console.log("My IP:", ip);
   return !!ip && allowedRules.some((rule) => isIpMatch(ip, rule));
 }
 function isIpMatch(ip, rule) {
@@ -1384,7 +1374,7 @@ async function handleWS(ctx, request) {
             return;
           }
           const chunkLen = chunk?.byteLength ?? chunk?.length ?? 0;
-          const ssCandidate = ssDecoder || ctx.skc0Lock && chunkLen >= SALT_SIZE + 27 && isIpAllowed(request, ctx.allowedRules);
+          const ssCandidate = ssDecoder || ctx.skc0Lock && chunkLen >= SALT_SIZE + 27;
           if (ssCandidate) {
             if (!ssDecoder) ssDecoder = createRequestDecoder(ctx.ssPsk);
             const out = await ssDecoder.feed(chunk);
@@ -1397,7 +1387,7 @@ async function handleWS(ctx, request) {
               return;
             }
           }
-          let mapCode = detectKind(chunk, request, ctx.allowedRules);
+          let mapCode = detectKind(chunk);
           const parseHandlers = {
             1: [parseS5elv, [chunk, ctx.userID]],
             2: [parseNaj0rt, [chunk, ctx.sha224Password]]
@@ -1447,6 +1437,9 @@ var worker_default = {
           return Response.redirect(randomDomain, 301);
         }
         return new Response("404 Not Found!", { status: 404 });
+      }
+      if (!isIpAllowed(request, runtime.wsAllowedRules)) {
+        return new Response("Forbidden", { status: 403 });
       }
       const connection = createConnContext(runtime, path, env);
       return await handleWS(connection, request);

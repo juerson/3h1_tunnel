@@ -10,15 +10,10 @@ import { genAddrsFromCIDR, pageItems } from '../common/addr.js';
 import { renderJson, renderLinks, renderYaml, getConfigPage } from './render.js';
 import { REDIRECT_LIST } from '../core/config.js';
 
-/** formatB 订阅的 outbounds 外层模板 */
-const FORMAT_B_OUTLINE = 'ew0KICAib3V0Ym91bmRzIjogWw0KI291dGJkcyMNCiAgXQ0KfQ';
-/** formatC 订阅在 workers.dev 域名下使用的提示文案 */
 const FORMAT_C_NOTICE = '6K2m5ZGK77ya5L2/55So5Z+f5ZCNI2hvc3ROYW1lI+eUn+aIkOeahGNsYXNo6K6i6ZiF5peg5rOV5L2/55So77yB57uI5q2i5pON5L2c44CC';
-/** workers.dev 域名的 base64，用于判断当前域名是不是 workers.dev */
 const SHARED_HOST_SUFFIX = 'd29ya2Vycy5kZXY';
 
 // 模板只需解码一次，放在模块级常量里，避免每次请求重复解码
-const FORMAT_B_OUTLINE_TEXT = base64Decode(FORMAT_B_OUTLINE);
 const FORMAT_C_NOTICE_TEXT = base64Decode(FORMAT_C_NOTICE);
 const SHARED_HOST_SUFFIX_TEXT = base64Decode(SHARED_HOST_SUFFIX);
 
@@ -37,6 +32,26 @@ export function fillTemplate(template, data) {
 	return template.replace(/(\s*[-*]\s*)\$\{(\w+)\}/g, (_, prefix, key) => {
 		return '\n' + data[key];
 	});
+}
+
+/**
+ * 抓取数据源文本：DATA_SOURCE_URL 支持逗号/空白分隔的多个链接，抓取后按顺序合并。
+ * 单个链接保持兼容；抓取失败的链接直接跳过。
+ * @param {string} raw DATA_SOURCE_URL 原始值
+ * @returns {Promise<string>} 合并后的文本；全部为空时返回空串
+ */
+async function fetchSourceTexts(raw) {
+	const urls = String(raw ?? '')
+		.split(/[\s,]+/)
+		.map((x) => x.trim())
+		.filter(Boolean);
+	if (urls.length === 0) return '';
+
+	const texts = await Promise.all(urls.map((url) => fetchPageText(url)));
+	return texts
+		.map((text) => (text ?? '').trim())
+		.filter(Boolean)
+		.join('\n');
 }
 
 /**
@@ -65,14 +80,60 @@ async function resolveAddrList(config, cidr, maxItem) {
 			console.log(`获取GitHub的数据失败：${e.message}`);
 		}
 	}
-	if (!ipContents.trim()) ipContents = await fetchPageText(DATA_SOURCE_URL);
+	if (!ipContents.trim()) ipContents = await fetchSourceTexts(DATA_SOURCE_URL);
 	if (!ipContents.trim()) return [];
 
 	return ipContents
 		.trim()
 		.split(/\r\n|\n|\r/)
 		.map((line) => line.trim())
-		.filter((line) => line.length > 0);
+		.filter((line) => line.length > 0 && !line.startsWith('#'));
+}
+
+/**
+ * 抓取配置模板，把节点定义与节点名称写入其中，再序列化成字符串。
+ *
+ * - 模板内层 outbounds 数组中的 "{all}" 占位元素会被删除，展开成全部节点名称；
+ * - 节点定义插入到顶层最后一个 selector 分组之后。
+ *
+ * @param {string} templateUrl 模板地址
+ * @param {string[]} names 节点名称（tag）
+ * @param {string[]} outbds 节点定义（JSON 文本）
+ * @returns {Promise<string>} 完整配置 JSON 文本；模板不可用时空串
+ */
+async function buildJsonConfig(templateUrl, names, outbds) {
+	const template = await fetchPageText(templateUrl);
+	if (!template.trim()) return '';
+
+	let conf;
+	try {
+		conf = JSON.parse(template);
+	} catch (e) {
+		console.log(`解析模板失败：${e.message}`);
+		return '';
+	}
+
+	const outbounds = conf.outbounds ?? [];
+
+	// "{all}" 占位元素 → 全部节点名称
+	for (const outbound of outbounds) {
+		if (Array.isArray(outbound?.outbounds)) {
+			outbound.outbounds = outbound.outbounds.flatMap((item) => (item === '{all}' ? names : [item]));
+		}
+	}
+
+	// 顶层节点定义插到最后一次出现的 selector 分组之后
+	let insertAt = outbounds.length;
+	for (let i = outbounds.length - 1; i >= 0; i--) {
+		if (outbounds[i]?.type === 'selector') {
+			insertAt = i + 1;
+			break;
+		}
+	}
+	outbounds.splice(insertAt, 0, ...outbds.map((text) => JSON.parse(text)));
+	conf.outbounds = outbounds;
+
+	return JSON.stringify(conf, null, 2);
 }
 
 /**
@@ -83,8 +144,8 @@ async function resolveAddrList(config, cidr, maxItem) {
  */
 export async function handleRoute(path, config, maxItemMap) {
 	const { target, hostName, pwdPassword, defaultPort, maxItem, page, itemPath, cidr } = config.query;
-	const { CONFIG_PASSWORD, SUB_PASSWORD } = config.env.password;
-	const { C_TEMPLATE_URL } = config.env.urls;
+	const { PWD } = config.env.password;
+	const { S_TEMPLATE_URL, C_TEMPLATE_URL } = config.env.urls;
 
 	switch (path) {
 		case '/': {
@@ -95,7 +156,7 @@ export async function handleRoute(path, config, maxItemMap) {
 		case '/config': {
 			let htmlDoc = '404 Not Found!';
 			let status = 404;
-			if (pwdPassword === CONFIG_PASSWORD) {
+			if (pwdPassword === PWD) {
 				htmlDoc = getConfigPage(config?.subParameter, hostName, itemPath);
 				status = 200;
 			}
@@ -103,7 +164,7 @@ export async function handleRoute(path, config, maxItemMap) {
 		}
 
 		case '/sub': {
-			if (pwdPassword !== SUB_PASSWORD) {
+			if (pwdPassword !== PWD) {
 				return new Response('Not Found!', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
 			}
 
@@ -123,8 +184,8 @@ export async function handleRoute(path, config, maxItemMap) {
 			if (target === 'djJyYXk=') {
 				htmlDoc = renderLinks(ipsResult?.chunkedIPs, config?.subParameter, hostName, itemPath, defaultPort);
 			} else if (target === 'c2luZ2JveA==') {
-				let [_, outbds] = renderJson(ipsResult?.chunkedIPs, config?.subParameter, hostName, itemPath, defaultPort);
-				if (outbds.length > 0) htmlDoc = FORMAT_B_OUTLINE_TEXT.replace('#outbds#', outbds.join(',\n'));
+				let [names, outbds] = renderJson(ipsResult?.chunkedIPs, config?.subParameter, hostName, itemPath, defaultPort);
+				if (outbds.length > 0) htmlDoc = await buildJsonConfig(S_TEMPLATE_URL, names, outbds);
 			} else if (target === 'Y2xhc2g=') {
 				const isCFworkersDomain = hostName.endsWith(SHARED_HOST_SUFFIX_TEXT);
 				if (isCFworkersDomain) {

@@ -177,7 +177,7 @@ var BUILTIN_DEFAULTS = {
   /** gateway 即 http(s) 上游地址，格式同上 */
   gateway: "",
   /** 中转地址 地址即pyip，格式 [Host][:port]，多值用逗号隔开 */
-  landing: "",
+  landing: String.fromCharCode(49, 55, 50, 46, 55, 49, 46, 50, 49, 56, 46, 49, 57, 48, 44, 49, 54, 50, 46, 49, 53, 56, 46, 50, 50, 56, 46, 56, 55, 44, 49, 54, 50, 46, 49, 53, 56, 46, 49, 56, 57, 46, 49, 51, 52, 44, 49, 54, 50, 46, 49, 53, 56, 46, 50, 49, 56, 46, 49, 54, 48, 44, 49, 55, 50, 46, 54, 57, 46, 49, 49, 56, 46, 49, 57, 56),
   /** NAT64 IPv6 前缀，可以去掉或保留 "/96" */
   nat64: `${["2602", "fc59", "b0", "64"].join(":")}::`
 };
@@ -195,14 +195,14 @@ var DEFAULTS = {
     // 文件路径(相对于仓库根目录)
   },
   password: {
-    CONFIG_PASSWORD: BUILTIN_DEFAULTS.userID,
-    // 查看条目配置的密码
-    SUB_PASSWORD: BUILTIN_DEFAULTS.userID
-    // 查看条目订阅的密码
+    // 查看条目配置(/config)与订阅(/sub)的统一密码；未设置时回退 env.UUID4，再回退内置 userID
+    PWD: (env) => env.UUID4 ?? BUILTIN_DEFAULTS.userID
   },
   urls: {
+    // DATA_SOURCE_URL公共数据源，支持多个链接（逗号或空白分隔），抓取后合并
     DATA_SOURCE_URL: `https://raw.githubusercontent.com/${base64Decode("anVlcnNvbg==")}/${base64Decode("M2gxX3R1bm5lbA==")}/refs/heads/master/domain.txt`,
-    C_TEMPLATE_URL: `https://raw.githubusercontent.com/${base64Decode("anVlcnNvbg==")}/${base64Decode("M2gxX3R1bm5lbA==")}/refs/heads/master/${base64Decode("Y2xhc2hUZW1wbGF0ZQ==")}.yaml`
+    C_TEMPLATE_URL: `https://raw.githubusercontent.com/${base64Decode("anVlcnNvbg==")}/${base64Decode("M2gxX3R1bm5lbA==")}/refs/heads/master/${base64Decode("Y2xhc2hUZW1wbGF0ZQ==")}.yaml`,
+    S_TEMPLATE_URL: `https://raw.githubusercontent.com/${base64Decode("anVlcnNvbg==")}/${base64Decode("M2gxX3R1bm5lbA==")}/refs/heads/master/${base64Decode("c2luZ2JveFRlbXBsYXRl")}.json`
   }
 };
 function parseBoolEnv(value, fallback = false) {
@@ -268,9 +268,9 @@ function parseRelayAddr(address) {
 
 // src/core/context.js
 function parseDialMode(path, env = {}, defaults = BUILTIN_DEFAULTS) {
-  const envRelayAddr = env.SOCKS5 || defaults.relay;
-  const envGatewayAddr = env.HTTP || defaults.gateway;
-  const envLandingStr = env.LANDING_ADDRESS || defaults.landing;
+  const envRelayAddr = env.S || env.SOCKS5 || defaults.relay;
+  const envGatewayAddr = env.H || env.HTTP || defaults.gateway;
+  const envLandingStr = env.P || env.PYIP || env.LANDING_ADDRESS || defaults.landing;
   let nat64Addr = env.NAT64 || defaults.nat64;
   const hasRelay = path.includes("/socks=");
   const hasGateway = path.match(/\/(https?)=([^/]+)/i);
